@@ -1,0 +1,30 @@
+{
+  "name": "st-claude-cli-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "把 Claude CLI (claude -p) 包装成 OpenAI 兼容端点，供 SillyTavern 的 Custom (OpenAI-compatible) 源调用",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mar7thLover/st-claude-cli-bridge.git"
+  },
+  "keywords": [
+    "sillytavern",
+    "claude",
+    "claude-code",
+    "openai-compatible",
+    "bridge",
+    "proxy"
+  ],
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node scripts/unit.js",
+    "test:cli": "node scripts/selftest.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {}
+}

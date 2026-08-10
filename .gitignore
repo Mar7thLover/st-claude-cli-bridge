@@ -1,0 +1,13 @@
+.sandbox/
+logs/
+node_modules/
+
+# CLAUDE.md 会被 CLI 自动读入并污染人设，别放在仓库根目录
+/CLAUDE.md
+
+# OS / 编辑器
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
