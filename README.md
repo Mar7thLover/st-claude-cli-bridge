@@ -63,6 +63,24 @@ ST 会把预设、角色卡、世界书、聊天记录组装成一个 OpenAI 风
 
 ---
 
+## 可用模型
+
+`config.json` 的 `models` 数组只是 ST 下拉框里的候选项，桥接不做校验，
+原样传给 `claude --model`。想用别的，自己往数组里加即可（能不能跑取决于你账号的权限）。
+
+| 分类 | 模型名 |
+| --- | --- |
+| 当前主力 | `claude-opus-5`、`claude-sonnet-5`、`claude-fable-5` |
+| 长上下文变体 | `claude-opus-5[1m]` |
+| 上一代 Opus | `claude-opus-4-8`、`claude-opus-4-7`、`claude-opus-4-6`、`claude-opus-4-5` |
+| 上一代 Sonnet | `claude-sonnet-4-6` |
+| 轻量 | `claude-haiku-4-5-20251001` |
+| 别名（跟随最新） | `opus`、`sonnet`、`haiku`、`fable` |
+
+老模型全部实测可用。**要在 ST 里真看到思维过程就得挑 4.6 及更早的**，见下一节的实测表。
+
+---
+
 ## 关于「扩展思考」
 
 `config.json` 里是 **`"thinking": false`**（关闭）。原因见下面的实测表：Claude 5 家族
@@ -86,11 +104,17 @@ ST 会把预设、角色卡、世界书、聊天记录组装成一个 OpenAI 风
 | `claude-opus-5` | 有 | **0 字（加密）** | 50 |
 | `claude-fable-5` | 有 | **0 字（加密）** | 50 |
 | `claude-sonnet-5` | 有 | **0 字（加密）** | 50 |
+| `claude-opus-4-8` | 有 | **0 字（加密）** | 50 |
+| `claude-opus-4-7` | 有 | **0 字（加密）** | 50 |
+| `claude-opus-4-6` | 有 | **75 字明文摘要** | null |
+| `claude-opus-4-5` | 有 | **176 字明文摘要** | null |
+| `claude-sonnet-4-6` | 有 | **441 字明文摘要** | null |
 | `claude-haiku-4-5-20251001` | 有 | **347 字明文摘要** | null |
 
-Claude 5 家族只返回签名和 token 估计，思维正文由 Anthropic 加密，不对外给明文——
+Claude 5 家族和 Opus 4.7 / 4.8 只返回签名和 token 估计，思维正文由 Anthropic 加密，不对外给明文——
 思考**确实在跑**（计入 output_tokens），但 ST 的思维折叠块拿不到内容。
-只有上一代的 Haiku 4.5 还会返回梳理后的明文摘要。
+**4.6 及更早**（Opus 4.6 / 4.5、Sonnet 4.6、Haiku 4.5）还会返回梳理后的明文摘要——
+想在 ST 里真看到思维过程，只能用这几个老模型，`models` 数组里已经给它们预置了 `:think` 变体。
 
 因此桥接在「有思考块但没有明文」时会推一条回执，免得思维块空空如也看起来像没生效：
 
