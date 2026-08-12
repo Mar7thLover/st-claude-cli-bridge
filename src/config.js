@@ -17,6 +17,14 @@ const DEFAULTS = {
     timeoutMs: 600000,
     extraArgs: [],
 
+    // 会话续接：只把新增的一轮发给 CLI，靠 --resume 让历史留在前缀缓存里。
+    // 省 token 很可观，但会话会明文落盘到 ~/.claude/projects，且 prefill / 带图 /
+    // 被截断的轮次无法续接，与 ST 的贴合度略降，所以默认关闭。
+    sessionMode: false,
+    sessionMaxStates: 12,
+    sessionTtlMs: 7200000,
+    sessionCleanup: 'off',   // off | gc | all，见 README
+
     thinking: false,
     reasoningPlaceholder: true,
     thinkingTokens: 4000,
@@ -49,6 +57,7 @@ function applyEnv(cfg) {
     if (env.BRIDGE_MODEL) cfg.defaultModel = env.BRIDGE_MODEL;
     if (env.BRIDGE_CLAUDE_PATH) cfg.claudePath = env.BRIDGE_CLAUDE_PATH;
     if (env.BRIDGE_DEBUG) cfg.debug = /^(1|true|yes|on)$/i.test(env.BRIDGE_DEBUG);
+    if (env.BRIDGE_SESSION_MODE) cfg.sessionMode = /^(1|true|yes|on)$/i.test(env.BRIDGE_SESSION_MODE);
     return cfg;
 }
 
@@ -66,6 +75,11 @@ export function loadConfig(file = path.join(ROOT, 'config.json')) {
     delete user.$schema;
 
     const cfg = applyEnv({ ...DEFAULTS, ...user, roleLabels: { ...DEFAULTS.roleLabels, ...(user.roleLabels || {}) } });
+
+    if (!['off', 'gc', 'all'].includes(cfg.sessionCleanup)) {
+        console.warn(`[config] sessionCleanup 取值无效（${cfg.sessionCleanup}），已按 "off" 处理`);
+        cfg.sessionCleanup = 'off';
+    }
 
     cfg.workDir = path.resolve(ROOT, cfg.workDir);
     cfg.logDir = path.resolve(ROOT, cfg.logDir);

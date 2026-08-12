@@ -4,10 +4,12 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config.js';
-import { buildPrompt } from './messages.js';
+import { buildPrompt, composePrompt, renderAssistantLine } from './messages.js';
 import { runClaude, probeClaude, sweepRuns } from './claude.js';
+import { SessionStore, sweepSessions, hash } from './session.js';
 
 const cfg = loadConfig();
+const sessions = new SessionStore(cfg);
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 
 /* ---------------------------------- 工具 ---------------------------------- */
@@ -185,11 +187,20 @@ async function handleChatCompletions(req, res) {
     const id = `chatcmpl-${randomUUID().replace(/-/g, '').slice(0, 24)}`;
     const created = Math.floor(Date.now() / 1000);
 
-    log(`→ ${model}${finalEffort ? ` (effort=${finalEffort})` : ''}${thinking ? ' (thinking)' : ''} | ${body.messages.length} msgs | system ${built.system.length} 字 | prompt ${built.prompt.length} 字` +
-        `${built.prefill ? ' | prefill' : ''}${built.images.length ? ` | ${built.images.length} 图` : ''}${stream ? ' | stream' : ''}`);
+    const plan = planSession(built);
+    const prompt = plan
+        ? composePrompt({ lines: built.lines, from: plan.from, prefill: built.prefill, cfg })
+        : built.prompt;
+
+    const sessionNote = !plan ? ''
+        : plan.resumeFrom ? ` | 续接 +${built.lines.length - plan.from} 行`
+        : ' | 新会话';
+
+    log(`→ ${model}${finalEffort ? ` (effort=${finalEffort})` : ''}${thinking ? ' (thinking)' : ''} | ${body.messages.length} msgs | system ${built.system.length} 字 | prompt ${prompt.length} 字` +
+        `${built.prefill ? ' | prefill' : ''}${built.images.length ? ` | ${built.images.length} 图` : ''}${stream ? ' | stream' : ''}${sessionNote}`);
     debug('system 开头:', built.system.slice(0, 300).replace(/\n/g, '⏎'));
     debug('prompt 结尾:', built.prompt.slice(-300).replace(/\n/g, '⏎'));
-    if (cfg.logPrompts) dumpRequest(id, body, built, { model, effort: finalEffort, thinking, maxTokens, stop });
+    if (cfg.logPrompts) dumpRequest(id, body, { ...built, prompt }, { model, effort: finalEffort, thinking, maxTokens, stop });
 
     // 客户端（ST）中断时终止子进程。用 res 的 close 事件：req 的 close 在正常读完 body 后也会触发
     const controller = new AbortController();
@@ -232,15 +243,19 @@ async function handleChatCompletions(req, res) {
         try {
             const result = await runClaude({
                 system: built.system,
-                prompt: built.prompt,
+                prompt,
                 model, effort: finalEffort, thinking, maxTokens, stop,
                 images: built.images,
                 prefill: built.prefill,
                 assistantLabels: built.assistantLabels,
+                sessionId: plan?.sessionId,
+                resumeFrom: plan?.resumeFrom,
                 signal: controller.signal,
                 onText: t => send({ content: t }),
                 onReasoning: t => send({ reasoning_content: t }),
             }, cfg);
+
+            settleSession(plan, result);
 
             if (!res.writableEnded) {
                 res.write(`data: ${JSON.stringify({
@@ -251,7 +266,7 @@ async function handleChatCompletions(req, res) {
                 res.write('data: [DONE]\n\n');
                 res.end();
             }
-            log(`← ${result.text.length} 字 / ${Date.now() - started}ms${result.usage ? ` / in ${result.usage.input_tokens} out ${result.usage.output_tokens}` : ''}`);
+            log(`← ${result.text.length} 字 / ${Date.now() - started}ms${usageNote(result.usage)}`);
         } catch (err) {
             log('✗ 生成失败:', err.message);
             if (!res.writableEnded) {
@@ -271,20 +286,24 @@ async function handleChatCompletions(req, res) {
     try {
         const result = await runClaude({
             system: built.system,
-            prompt: built.prompt,
+            prompt,
             model, effort: finalEffort, thinking, maxTokens, stop,
             images: built.images,
             prefill: built.prefill,
             assistantLabels: built.assistantLabels,
+            sessionId: plan?.sessionId,
+            resumeFrom: plan?.resumeFrom,
             signal: controller.signal,
         }, cfg);
+
+        settleSession(plan, result);
 
         if (clientGone) return;
 
         const message = { role: 'assistant', content: result.text };
         if (result.reasoning) message.reasoning_content = result.reasoning;
 
-        log(`← ${result.text.length} 字 / ${Date.now() - started}ms`);
+        log(`← ${result.text.length} 字 / ${Date.now() - started}ms${usageNote(result.usage)}`);
         json(res, 200, {
             id, object: 'chat.completion', created, model,
             choices: [{ index: 0, message, logprobs: null, finish_reason: result.finishReason || 'stop' }],
@@ -297,6 +316,52 @@ async function handleChatCompletions(req, res) {
         res.off("close", onClose);
         release();
     }
+}
+
+/* ------------------------------- 会话续接 ------------------------------- */
+
+/**
+ * 决定这一轮是「续接已有会话」还是「另起一条链」。
+ * prefill 的续写指令、图片的绝对路径都会永久留在会话历史里污染后续轮次，
+ * 所以这两种请求仍然可以读缓存，但不能被记成新的续接起点。
+ */
+function planSession(built) {
+    if (!cfg.sessionMode) return null;
+
+    const systemHash = hash(built.system);
+    const chain = built.lines.map(hash);
+    const found = sessions.plan(systemHash, chain);
+
+    return {
+        systemHash,
+        chain,
+        assistantLabel: built.assistantLabel,
+        committable: !built.prefill && built.images.length === 0,
+        resumeFrom: found ? found.sessionId : '',
+        from: found ? found.from : 0,
+        sessionId: found ? '' : randomUUID(),
+    };
+}
+
+function settleSession(plan, result) {
+    if (!plan) return;
+    if (!plan.committable || result.truncated || !result.text) {
+        sessions.drop(result.sessionId);
+        return;
+    }
+    sessions.commit({
+        sessionId: result.sessionId,
+        systemHash: plan.systemHash,
+        chain: [...plan.chain, hash(renderAssistantLine(result.text, plan.assistantLabel))],
+    });
+}
+
+/** 缓存命中情况直接打在日志里，方便确认 sessionMode 到底有没有生效 */
+function usageNote(u) {
+    if (!u) return '';
+    const read = u.cache_read_input_tokens || 0;
+    const write = u.cache_creation_input_tokens || 0;
+    return ` / in ${u.input_tokens || 0} 缓存读 ${read} 写 ${write} out ${u.output_tokens || 0}`;
 }
 
 function toUsage(u) {
@@ -322,7 +387,11 @@ const server = http.createServer((req, res) => {
     }
 
     if (p === '/health' || p === '/') {
-        return json(res, 200, { status: 'ok', bridge: 'st-claude-cli-bridge', model: cfg.defaultModel, running, queued: waiters.length });
+        return json(res, 200, {
+            status: 'ok', bridge: 'st-claude-cli-bridge', model: cfg.defaultModel,
+            running, queued: waiters.length,
+            session: cfg.sessionMode ? sessions.stats() : null,
+        });
     }
 
     if (!authorized(req)) {
@@ -358,6 +427,7 @@ if (process.platform === 'win32' && process.stdout.isTTY) {
 }
 
 sweepRuns(cfg);
+sweepSessions(cfg);
 const probe = probeClaude(cfg);
 if (!probe.ok) {
     console.error(`\n[启动失败] 找不到可用的 Claude CLI（claudePath = "${cfg.claudePath}"）`);
@@ -375,6 +445,16 @@ server.listen(cfg.port, cfg.host, () => {
     console.log(`  默认模型   : ${cfg.defaultModel}`);
     console.log(`  API Key    : ${cfg.apiKey ? '已启用' : '未设置（留空即可连接）'}`);
     console.log(`  并发上限   : ${cfg.maxConcurrent}`);
+    if (cfg.sessionMode) {
+        const CLEANUP = {
+            off: '会话文件保留，需自行清理',
+            gc: '回收淘汰的会话，退出时保留',
+            all: '启动与退出时清空全部会话',
+        };
+        console.log(`  会话续接   : 已开启（落盘到 ~/.claude/projects；${CLEANUP[cfg.sessionCleanup]}）`);
+    } else {
+        console.log('  会话续接   : 关闭');
+    }
     console.log('');
     console.log('  在 ST 里选 Chat Completion → Custom (OpenAI-compatible)，');
     console.log(`  Custom Endpoint 填 ${base}，然后点 Connect。`);
@@ -384,6 +464,7 @@ server.listen(cfg.port, cfg.host, () => {
 for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => {
         log('正在关闭…');
+        sweepSessions(cfg);
         server.close(() => process.exit(0));
         setTimeout(() => process.exit(0), 2000).unref();
     });

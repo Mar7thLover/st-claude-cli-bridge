@@ -1,7 +1,8 @@
 /** 纯函数单测（不调用 API）: node scripts/unit.js */
 import assert from 'node:assert/strict';
-import { buildPrompt, StopWatcher, OutputSanitizer, normalizeContent } from '../src/messages.js';
+import { buildPrompt, StopWatcher, OutputSanitizer, normalizeContent, composePrompt, renderAssistantLine } from '../src/messages.js';
 import { loadConfig } from '../src/config.js';
+import { SessionStore, hash } from '../src/session.js';
 
 const cfg = loadConfig();
 let n = 0;
@@ -153,6 +154,105 @@ test('正文里的冒号不受影响', () => {
     let out = s.push('她说：「小雾：这名字真怪。」');
     out += s.flush();
     assert.equal(out, '她说：「小雾：这名字真怪。」');
+});
+
+console.log('\nsession.js（会话续接）:');
+
+const sCfg = { ...cfg, sessionMode: true };
+
+/** 走一遍 server.js 里的规划 → 出参 → 提交流程，replyText 为 undefined 表示这轮不提交 */
+function turn(store, messages, replyText) {
+    const built = buildPrompt(messages, sCfg);
+    const systemHash = hash(built.system);
+    const chain = built.lines.map(hash);
+
+    const found = store.plan(systemHash, chain);
+    const from = found ? found.from : 0;
+    const prompt = composePrompt({ lines: built.lines, from, prefill: built.prefill, cfg: sCfg });
+
+    if (replyText !== undefined) {
+        store.commit({
+            sessionId: `sid-${store.states.length + 1}`,
+            systemHash,
+            chain: [...chain, hash(renderAssistantLine(replyText, built.assistantLabel))],
+        });
+    }
+    return { from, prompt, resumed: Boolean(found), lines: built.lines.length };
+}
+
+const T1 = [{ role: 'system', content: '角色卡' }, { role: 'user', content: '你好' }];
+const T2 = [...T1, { role: 'assistant', content: '我在。' }, { role: 'user', content: '走吧' }];
+
+test('第二轮只发新增的那一行', () => {
+    const s = new SessionStore(sCfg);
+    assert.equal(turn(s, T1, '我在。').from, 0);
+
+    const r = turn(s, T2, '好的。');
+    assert.equal(r.resumed, true);
+    assert.equal(r.from, 2, 'delta 起点不对');
+    assert.ok(r.prompt.includes('走吧'));
+    assert.ok(!r.prompt.includes('你好'), '历史被重复下发了');
+    assert.ok(!r.prompt.includes('以下是当前对话记录'), '续接时不该重复抬头');
+});
+
+test('swipe 命中父状态而不是自己', () => {
+    const s = new SessionStore(sCfg);
+    turn(s, T1, '我在。');
+    turn(s, T2, '好的。');
+
+    const r = turn(s, T2);          // ST 重发同一份 transcript
+    assert.equal(r.from, 2, 'swipe 应当从上一轮的状态重开');
+    assert.ok(r.prompt.includes('走吧'));
+});
+
+test('用户编辑了历史消息 → 链断裂，全量重放', () => {
+    const s = new SessionStore(sCfg);
+    turn(s, T1, '我在。');
+    turn(s, T2, '好的。');
+
+    const edited = [...T1, { role: 'assistant', content: '我在～' }, { role: 'user', content: '走吧' }];
+    const r = turn(s, edited);
+    assert.equal(r.resumed, false);
+    assert.equal(r.from, 0);
+    assert.ok(r.prompt.includes('你好'), '应当退回全量重放');
+});
+
+test('system 变化不续接', () => {
+    const s = new SessionStore(sCfg);
+    turn(s, T1, '我在。');
+
+    const swapped = [{ role: 'system', content: '换了张角色卡' }, ...T2.slice(1)];
+    assert.equal(turn(s, swapped).resumed, false);
+});
+
+test('回复被 ST 改动过空白也能接上', () => {
+    const s = new SessionStore(sCfg);
+    turn(s, T1, '我在。\n\n');       // 模型原始输出带尾随空行
+    const r = turn(s, T2);           // ST 回传时已被修剪
+    assert.equal(r.from, 2);
+});
+
+test('prefill 轮次可以读缓存但不作为续接起点', () => {
+    const s = new SessionStore(sCfg);
+    turn(s, T1, '我在。');
+    const before = s.stats().states;
+
+    const withPrefill = [...T2, { role: 'assistant', content: '她抬起头，' }];
+    const built = buildPrompt(withPrefill, sCfg);
+    assert.equal(built.prefill, '她抬起头，');
+    const found = s.plan(hash(built.system), built.lines.map(hash));
+    assert.ok(found, 'prefill 轮次仍应命中已有会话');
+    assert.equal(s.stats().states, before, 'prefill 轮次不该新增状态');
+});
+
+test('状态表始终有上限，与清理策略无关', () => {
+    for (const sessionCleanup of ['off', 'gc', 'all']) {
+        const s = new SessionStore({ ...sCfg, sessionCleanup, sessionMaxStates: 3 });
+        for (let i = 0; i < 8; i++) {
+            s.commit({ sessionId: `unit-nonexistent-${i}`, systemHash: 'h', chain: [`c${i}`] });
+        }
+        assert.equal(s.stats().states, 3, `${sessionCleanup} 下状态表没有被限制`);
+    }
 });
 
 console.log(`\n${n} 项通过${process.exitCode ? '，有失败 ❌' : ' ✅'}\n`);

@@ -104,30 +104,58 @@ export function buildPrompt(messages, cfg) {
         lines.push(`${label}:\n${content}`);
     }
 
-    const transcript = lines.join('\n\n');
-
     // 4) 拼装
     const system = [cfg.systemPreamble, systemParts.join('\n\n')]
         .map(s => (s || '').trim())
         .filter(Boolean)
         .join('\n\n');
 
-    const promptChunks = [];
-    if (cfg.transcriptHeader) promptChunks.push(cfg.transcriptHeader.trim());
-    promptChunks.push(transcript || '(空对话)');
-    if (prefill) {
-        promptChunks.push(String(cfg.prefillInstruction || '').replace('{{prefill}}', prefill).trim());
-    } else if (cfg.finalInstruction) {
-        promptChunks.push(cfg.finalInstruction.trim());
-    }
-
     return {
         system: system || '你是一个专业的创意写作助手。',
-        prompt: promptChunks.filter(Boolean).join('\n\n'),
+        prompt: composePrompt({ lines, prefill, cfg }),
+        lines,
         images,
         prefill,
         assistantLabels: assistantLabels(body, cfg),
+        assistantLabel: lastAssistantLabel(body, cfg),
     };
+}
+
+/**
+ * 把对话行拼成 stdin 正文。
+ * sessionMode 续接时只发 from 之后的几行，此时不再重复「以下是当前对话记录」这个抬头。
+ */
+export function composePrompt({ lines, from = 0, prefill = '', cfg }) {
+    const chunks = [];
+    const body = lines.slice(from).join('\n\n');
+
+    if (from === 0) {
+        if (cfg.transcriptHeader) chunks.push(cfg.transcriptHeader.trim());
+        chunks.push(body || '(空对话)');
+    } else {
+        chunks.push(body);
+    }
+
+    if (prefill) {
+        chunks.push(String(cfg.prefillInstruction || '').replace('{{prefill}}', prefill).trim());
+    } else if (cfg.finalInstruction) {
+        chunks.push(cfg.finalInstruction.trim());
+    }
+
+    return chunks.filter(Boolean).join('\n\n');
+}
+
+/** 预测「本次回复下一轮回传时会被渲染成什么」，用来接上哈希链 */
+export function renderAssistantLine(text, label) {
+    return `${label}:\n${String(text).trim()}`;
+}
+
+/** 续接时优先沿用 ST 上一条 assistant 消息实际用的标签（可能带角色名） */
+function lastAssistantLabel(body, cfg) {
+    for (let k = body.length - 1; k >= 0; k--) {
+        if (body[k].role === 'assistant') return labelFor(body[k], cfg);
+    }
+    return cfg.roleLabels.assistant || 'Assistant';
 }
 
 /** 收集所有可能被模型误当成前缀吐出来的「说话人标签」 */

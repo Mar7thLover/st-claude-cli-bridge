@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { StopWatcher, OutputSanitizer } from './messages.js';
+import { sessionCwd } from './session.js';
 
 /** 解析 claude 可执行文件：优先 .exe / 无扩展名的原生二进制，退化到 .cmd 时走 shell */
 let resolved = null;
@@ -76,7 +77,13 @@ export async function runClaude(opts, cfg) {
 function runOnce(opts, cfg) {
     return new Promise((resolve, reject) => {
         const runId = randomUUID();
-        const runDir = path.join(cfg.workDir, 'runs', runId);
+
+        // sessionMode 下 cwd 必须稳定：否则每次请求都会在 ~/.claude/projects 下新开一个目录，
+        // session 文件散得到处都是没法回收。此时用文件名前缀区分并发请求。
+        const useSession = Boolean(opts.sessionId || opts.resumeFrom);
+        const runDir = useSession ? sessionCwd(cfg) : path.join(cfg.workDir, 'runs', runId);
+        const prefix = useSession ? `${runId}-` : '';
+        const fileOf = name => path.join(runDir, prefix + name);
         fs.mkdirSync(runDir, { recursive: true });
 
         const cleanup = () => {
@@ -84,19 +91,28 @@ function runOnce(opts, cfg) {
             // Windows 上子进程刚退出时仍会短暂持有 cwd 句柄，删不掉就退避重试
             const delays = [0, 250, 1000, 3000];
             const attempt = i => {
-                fs.rm(runDir, { recursive: true, force: true }, err => {
+                const done = err => {
                     if (err && i + 1 < delays.length) setTimeout(() => attempt(i + 1), delays[i + 1]).unref();
-                });
+                };
+                if (useSession) {
+                    // 目录是共用的，只能删本次请求自己落的那几个文件
+                    let pending = 1 + images.length;
+                    const tick = err => { if (err) done(err); else if (--pending === 0) done(null); };
+                    fs.rm(sysFile, { force: true }, tick);
+                    for (const img of images) fs.rm(fileOf(img.name), { force: true }, tick);
+                } else {
+                    fs.rm(runDir, { recursive: true, force: true }, done);
+                }
             };
             attempt(0);
         };
 
-        const sysFile = path.join(runDir, 'system.txt');
+        const sysFile = fileOf('system.txt');
         fs.writeFileSync(sysFile, opts.system ?? '', 'utf8');
 
         const images = (opts.images || []).filter(Boolean);
         for (const img of images) {
-            fs.writeFileSync(path.join(runDir, img.name), Buffer.from(img.data, 'base64'));
+            fs.writeFileSync(fileOf(img.name), Buffer.from(img.data, 'base64'));
         }
 
         const args = [
@@ -104,15 +120,20 @@ function runOnce(opts, cfg) {
             '--output-format', 'stream-json',
             '--include-partial-messages',
             '--verbose',
-            '--no-session-persistence',
             '--disable-slash-commands',
             '--setting-sources', '',
         ];
 
+        // 会话续接：--resume 复用历史（--fork-session 保住父节点，swipe 才能反复从同一处重开），
+        // 新开一条链时用 --session-id 直接指定 id。两者都不给就退回「不落盘」的老行为。
+        if (opts.resumeFrom) args.push('--resume', opts.resumeFrom, '--fork-session');
+        else if (opts.sessionId) args.push('--session-id', opts.sessionId);
+        else args.push('--no-session-persistence');
+
         let stdinPrompt = opts.prompt ?? '';
         if (images.length) {
             // Read 工具只认绝对路径，这里把落盘位置明确告诉模型
-            const list = images.map(img => path.join(runDir, img.name)).join('\n');
+            const list = images.map(img => fileOf(img.name)).join('\n');
             stdinPrompt += `\n\n---\n本条对话附带的图片已保存到本地，请先用 Read 工具读取它们，再据此作答：\n${list}`;
         }
         if (supportsSystemPromptFile) {
@@ -274,7 +295,13 @@ function runOnce(opts, cfg) {
                 const msg = (apiError || stderr.trim() || stdoutTail || `claude 退出码 ${code}`).slice(0, 1500);
                 return finish(new Error(msg));
             }
-            finish(null, { text, reasoning, finishReason, usage, sessionId, aborted: Boolean(opts.signal?.aborted) });
+            const aborted = Boolean(opts.signal?.aborted);
+            finish(null, {
+                text, reasoning, finishReason, usage, sessionId, aborted,
+                // 被停止序列砍掉 / 撞上 max_tokens / 被中断时，session 里存的正文
+                // 和回给 ST 的不一致，这一轮不能作为续接起点
+                truncated: stoppedBySequence || finishReason === 'length' || aborted,
+            });
         });
 
         /** 收到新一段原始文本：先过重发/续写判定，再过开头清理与停止序列 */
