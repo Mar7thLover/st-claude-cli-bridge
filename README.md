@@ -1,282 +1,164 @@
-# SillyTavern ⇄ Claude CLI 桥接
+# Claude CLI Bridge
 
-把本机的 **Claude Code CLI（`claude -p`）** 包装成一个 OpenAI 兼容端点，
-让 SillyTavern 通过 **Custom (OpenAI-compatible)** 源直接用上 Claude，
-同时完整保留 ST 的预设、角色卡、世界书、深度注入和助手预填充。
+把本机已登录的 **Claude Code CLI** 包装成 **OpenAI Chat Completions 兼容接口**，供各类聊天／角色扮演前端（如 SillyTavern 的 Custom (OpenAI-compatible) 源）直接调用。Node.js 22+，无第三方运行时依赖，不需要填写 Anthropic API Key，也不读取或复制登录凭据。
 
-- 零依赖，纯 Node（>= 20），不需要 `npm install`
-- 不需要 API Key：直接复用 `claude` 已登录的账号
-- 支持流式、停止序列、预填充、图片附件、思考过程
-- 可选的会话续接：让历史命中前缀缓存，长对话省下大量额度
+## 使用
 
----
-
-## 快速开始
-
-1. 确认 CLI 可用（已安装并登录 Claude Code）：
-
-   ```powershell
-   claude --version
-   ```
-
-2. 拉下仓库并启动桥接：双击 `start.bat`，或
-
-   ```powershell
-   git clone https://github.com/Mar7thLover/st-claude-cli-bridge.git
-   cd st-claude-cli-bridge
-   node src\server.js
-   ```
-
-   看到 `端点: http://127.0.0.1:5599/v1` 即为就绪。
-
-3. 在 SillyTavern 里：
-
-   | 位置 | 填什么 |
-   | --- | --- |
-   | API | **Chat Completion** |
-   | Chat Completion Source | **Custom (OpenAI-compatible)** |
-   | Custom Endpoint (Base URL) | `http://127.0.0.1:5599/v1` |
-   | Custom API Key | 留空（除非在 `config.json` 里设了 `apiKey`） |
-   | Available Models | 点 **Connect** 后从下拉里选，例如 `claude-sonnet-5` |
-
-4. 点 Connect，正常聊天即可。
-
----
-
-## 它到底做了什么
-
-ST 会把预设、角色卡、世界书、聊天记录组装成一个 OpenAI 风格的 `messages` 数组发过来。
-桥接按下面的规则把它翻译成一次 `claude -p` 调用：
-
-| ST 送来的东西 | 桥接的处理 |
-| --- | --- |
-| 开头连续的 `system` 消息（预设 + 角色卡 + 世界书主体） | 写成临时文件，通过 `--system-prompt-file` 完整替换掉 Claude Code 自带的「编程助手」人设 |
-| 对话中间的 `system` 消息（深度注入、作者注释） | **保持原位**，以 `System:` 的形式渲染进对话记录，不破坏注入深度 |
-| `user` / `assistant` 消息 | 渲染成 `Human:` / `Assistant:` 的对话记录，带 `name` 时渲染为 `Human (旅人):` |
-| 末尾的 `assistant` 消息（助手预填充） | CLI 无法直接下发 prefill，转成「从断点无缝续写」的指令；若模型仍然复述了开头，桥接会自动裁掉 |
-| 正文（可能上百 KB） | 走 **stdin**，绕开 Windows 32K 命令行长度限制 |
-| `stop` 停止序列 | 由桥接在流里做匹配，命中即截断并立刻杀掉子进程（CLI 本身没有这个参数） |
-| 图片附件 | 落盘到临时目录，仅开放 `Read` 工具让模型读取，用完即删 |
-| 工具调用 / function calling | 不支持，会被忽略 |
-
-生成侧固定使用 `--tools ""`（禁用全部工具）、`--setting-sources ""`、`--disable-slash-commands`，
-并关闭遥测与非必要后台请求，让它老老实实只做一次文本生成。默认还会加上 `--no-session-persistence`
-（什么都不落盘），除非开启了[会话续接](#会话续接sessionmode默认关闭)。
-
----
-
-## 可用模型
-
-`config.json` 的 `models` 数组只是 ST 下拉框里的候选项，桥接不做校验，
-原样传给 `claude --model`。想用别的，自己往数组里加即可（能不能跑取决于你账号的权限）。
-
-| 分类 | 模型名 |
-| --- | --- |
-| 当前主力 | `claude-opus-5`、`claude-sonnet-5`、`claude-fable-5` |
-| 长上下文变体 | `claude-opus-5[1m]` |
-| 上一代 Opus | `claude-opus-4-8`、`claude-opus-4-7`、`claude-opus-4-6`、`claude-opus-4-5` |
-| 上一代 Sonnet | `claude-sonnet-4-6` |
-| 轻量 | `claude-haiku-4-5-20251001` |
-| 别名（跟随最新） | `opus`、`sonnet`、`haiku`、`fable` |
-
-老模型全部实测可用。**要在 ST 里真看到思维过程就得挑 4.6 及更早的**，见下一节的实测表。
-
----
-
-## 关于「扩展思考」
-
-`config.json` 里是 **`"thinking": false`**（关闭）。原因见下面的实测表：Claude 5 家族
-的思维内容全部加密，开着只是白花 token 和时间，ST 那边什么也看不到。
-
-想临时开启，用模型名后缀，无需改配置：
-
-- `claude-opus-5:think`、`claude-opus-5:think:xhigh` —— 这次思考，可叠加 effort
-- `claude-sonnet-5:nothink` —— 全局开启时用来单次关闭
-
-后缀支持 `:think` / `:nothink` / `:low` / `:medium` / `:high` / `:xhigh` / `:max`，
-写不认识的后缀时整串会原样当模型名下发。想在 ST 下拉里直接选到，
-把带后缀的名字加进 `config.json` 的 `models` 数组即可（已预置了几个 `:think`）。
-
-### 各模型的思维内容暴露程度（实测）
-
-同一个解谜任务，抓 `thinking_delta` 事件：
-
-| 模型 | 有 thinking 块 | 明文内容 | `estimated_tokens` |
-| --- | --- | --- | --- |
-| `claude-opus-5` | 有 | **0 字（加密）** | 50 |
-| `claude-fable-5` | 有 | **0 字（加密）** | 50 |
-| `claude-sonnet-5` | 有 | **0 字（加密）** | 50 |
-| `claude-opus-4-8` | 有 | **0 字（加密）** | 50 |
-| `claude-opus-4-7` | 有 | **0 字（加密）** | 50 |
-| `claude-opus-4-6` | 有 | **75 字明文摘要** | null |
-| `claude-opus-4-5` | 有 | **176 字明文摘要** | null |
-| `claude-sonnet-4-6` | 有 | **441 字明文摘要** | null |
-| `claude-haiku-4-5-20251001` | 有 | **347 字明文摘要** | null |
-
-Claude 5 家族和 Opus 4.7 / 4.8 只返回签名和 token 估计，思维正文由 Anthropic 加密——
-思考**确实在跑**（计入 output_tokens），但 ST 的思维折叠块拿不到内容。
-想在 ST 里真看到思维过程，只能用 4.6 及更早那几个（`models` 数组已预置它们的 `:think` 变体）。
-
-所以桥接在「有思考块但没有明文」时会推一条回执，免得思维块空空如也看起来像没生效：
-
-> （模型已进行扩展思考，约 50 tokens。Claude 5 系列的思维内容由 Anthropic 加密，不对外返回明文。）
-
-不想要这条回执就设 `"reasoningPlaceholder": false`。
-
-### 两个需要预期管理的点
-
-1. **Sonnet 5 是自适应思考**：角色扮演这类创作任务，它经常直接跳过思考块，即使 `thinking`
-   开着也是 0 思考。这不是桥接失效，是模型自己判断不需要。
-2. **思考很贵**。Haiku 4.5 实测一条 80 字场景描写：开 6638 output tokens / 51 秒，关 154 tokens / 2.5 秒。
-   Claude 5 家族克制得多，但嫌慢嫌贵就用 `:nothink` 后缀，或把 `thinking` 改回 `false`。
-
----
-
-## 关于 max_tokens——默认不硬下发
-
-CLI 把输出上限当成**硬错误**：一旦撞上，它会先重发一遍同样的内容、再自动续写，最后直接报
-`API Error: Claude's response exceeded the N output token maximum`。ST 的默认值（常见 300~1000）
-几乎必然撞上，所以桥接默认只在 `max_tokens >= 2048` 时才真的下发。
-
-| `maxTokensMode` | 行为 |
-| --- | --- |
-| `"auto"`（默认） | 仅当 `max_tokens >= minHardMaxTokens`（默认 2048）时下发 |
-| `"always"` | 总是下发。桥接会识别 CLI 的重发/续写并做重同步去重，但接缝处仍可能不自然 |
-| `"off"` | 完全不下发 |
-
-想控制回复长度，更可靠的做法是写进 ST 预设里（「每次回复 2 段以内」这类），而不是靠 `max_tokens`。
-
----
-
-## 会话续接（`sessionMode`）——默认关闭
-
-桥接默认**无状态**：每轮把 ST 发来的全部历史拼成一大段正文交给 CLI。贴合 ST 最好，
-但整段对话记录在 API 侧是**单个消息块**，逐轮变长就逐轮换新，前缀缓存永远匹配不上——
-只有角色卡那半边（`--system-prompt-file`）能命中，对话正文每轮按 1 小时 TTL 重写一遍缓存，
-而那份缓存再也不会被读到。
-
-开启后改用 `--resume` 只把**新增的那一轮**发给 CLI，历史留在缓存里。实测（角色卡约 13k token）：
-
-| | 缓存读 | 缓存写 |
-| --- | --- | --- |
-| 关闭（默认） | 13096（仅角色卡） | 每轮重写整段对话记录 |
-| 开启 | 13403（角色卡 + 全部历史） | 110 → 103 → 0 |
-
-**这确实省额度。** 缓存读按基础输入价的 0.1× 计，1 小时 TTL 的缓存写按 2× 计——实测同一份 18160 token
-的前缀，未命中 $0.036472、命中 $0.001923，差 19 倍，且与官方价目表逐位吻合。订阅额度同样走缓存价：
-官方文档把「缓存未命中」单列为额度飙升的原因，`/usage` 还会在它占最近用量 ≥10% 时标出来。
-折算成基础输入等价 token，上表那一轮是 **19960 → 3153**，约 6.3 倍，对话越长差距越大。
-
-缓存生命周期在订阅计划下是 **1 小时**（用上 usage credits 会降到 5 分钟），
-所以省下的是一小时内连续对话的部分；隔夜回来的第一轮无论开不开都要全量重写。
-
-**怎么对上号的。** 每条渲染后的对话行取哈希串成链，某个已有会话的链是本次请求的**真前缀**就从那里续接。
-不按文本前缀比对，是因为会话里存的是模型原始输出，而 ST 回传的是被开头清理器和停止序列处理过的正文。
-哈希链顺带解决了两件事：**编辑历史消息 = 链断裂 = 自动全量重放**，不会让会话和 ST 悄悄分叉；
-swipe 则命中上一轮的状态（每轮都 `--fork-session`，父节点保持干净，可反复重开）。
-
-**代价，也是默认关闭的原因：**
-
-- 必须放弃 `--no-session-persistence`，对话正文会**明文落盘**到 `~/.claude/projects/`（清理策略见下）。
-- **prefill / 带图 / 被截断的轮次**不能作为续接起点：续写指令和图片绝对路径会永久污染后续历史，
-  截断则让会话里的正文与回给 ST 的不一致。这些轮次仍能读缓存，只是不记为新状态。
-- 换模型、换角色卡会让缓存失效；匹配不上时退回默认行为，最坏只是回到关闭时的成本。
-
-想确认生效，看日志里的 `续接 +N 行` 和 `缓存读 / 写`，或 `curl /health` 看 `session.hits`。
-
-### 会话文件的清理：`sessionCleanup`
-
-落下来的会话是可读的 jsonl，也能直接 `claude --resume <id>` 接着聊，所以**默认一个都不删**。
-
-| 取值 | 行为 |
-| --- | --- |
-| `"off"`（默认） | 全部保留，自行清理 |
-| `"gc"` | 只回收被淘汰的状态和用不上的 fork，退出时保留 |
-| `"all"` | 在 `gc` 基础上，启动与退出时清空本桥接产生的全部会话 |
-
-每轮都会 fork，而 **fork 是完整复制历史**（CLI 的行为，不是桥接的选择），所以 `"off"` 下
-长对话的磁盘占用大致是轮数的平方级。长期开着建议 `"gc"`；想留档就 `"off"` 加手动清理：
-
-```bash
-rm -rf ~/.claude/projects/*-sandbox-session/     # 目录名来自 workDir/session 的路径
+```powershell
+git clone https://github.com/Mar7thLover/st-claude-cli-bridge.git
+cd st-claude-cli-bridge
+npm run doctor
+npm start
 ```
 
-续接状态只存在内存里，**重启后旧会话文件不会再被续接**——`"off"` 下它们是存档，不是缓存。
+Windows 下也可以双击 `start.cmd`。桥接地址：`http://127.0.0.1:8788/v1`。Claude Code 未登录时，先在自己的终端运行 `claude auth login`。
 
----
+Windows 后台运行可使用 `./start-background.ps1`，停止使用 `./stop-background.ps1`。停止前先取消正在进行的生成；日志和 PID 存于 `.runtime`。前台和后台两种启动方式选一种，避免重复占用端口。
+
+在前端中按 OpenAI Chat Completions 接口配置：
+
+| 配置 | 值 |
+| --- | --- |
+| 接口类型 | OpenAI Chat Completions 兼容（SillyTavern：API 选 Chat Completion，Source 选 Custom (OpenAI-compatible)） |
+| Base URL | `http://127.0.0.1:8788/v1` |
+| API Key | 默认留空；设置 `server.apiKey`（或 `BRIDGE_API_KEY`）后填相同值 |
+| 模型 | 从 `/v1/models` 列表中选择，如 `sonnet`；也可指定 Claude Code 支持的完整模型 ID |
+
+角色卡、预设、Persona、世界书、作者注释等由前端负责组装（宏展开、世界书触发、深度注入、正则和历史分支选择）；桥接器只接收组装后的完整消息，不再次拼接，避免重复注入。
+
+## 模型和思考控制
+
+桥接器每次启动，通过 Claude Code SDK 的 `initialize` 控制消息读取当前账号的模型菜单和 effort 能力；发现菜单不发起模型生成，也不保存账号身份信息。由于 CLI 菜单只列最新模型，桥接器另外补充官方仍在服务的历史模型目录。`GET /v1/models` 返回菜单项、完整 ID、常用别名及旧版模型。`npm run models` 可随时重新查询，`npm run models -- --json` 输出详细能力。菜单随 Claude Code 版本、账号与提供商变化；用户额外配置的模型标记为 `configured`。
+
+2026-09-24，Claude Code 2.1.281、firstParty 登录发现以下 14 个 ID／别名（归属于 4 个模型）：
+
+| 模型 | 可传入的 model 值 | effort | 关闭思考 |
+| --- | --- | --- | --- |
+| Sonnet 5 | `sonnet`、`sonnet[1m]`、`claude-sonnet-5` | `low`、`medium`、`high`、`xhigh`、`max` | 允许 |
+| Opus 5.5 | `default`、`opus`、`opus[1m]`、`claude-opus-5-5`、`claude-opus-5-5[1m]` | 同上（API 默认 `medium`） | 不允许（任何 effort 下都不能关） |
+| Fable 5.1 | `fable`、`best`、`claude-fable-5-1`、`claude-fable-5-1[1m]` | 同上 | 不允许 |
+| Haiku 4.5 | `haiku`、`claude-haiku-4-5-20251001` | CLI 不支持 effort | 允许；可设置固定思考预算 |
+
+> 注意：2026-10-15 起，Claude Code 2.1.301 的菜单中 `sonnet`／`haiku` 已分别解析为 `claude-sonnet-5-5`／`claude-haiku-5-5`。静态能力规则尚未针对这两个模型核实：Haiku 5.5 目前按 CLI 菜单开放 effort，但「关闭思考」和固定思考预算暂不可用（返回 400）。实际能力以 `npm run models` 输出为准。
+
+`default` 当时解析为 `claude-opus-5-5[1m]`；`best` 解析为 Fable 5.1。完整 ID 可用于固定版本，别名可能随 CLI 升级变化。模型菜单可见不等于每个请求都会通过上游服务；配额、服务错误和内容拒绝仍会原样作为失败处理。
+
+此外，默认列表补充了以下 **8 个旧版模型**。`claude-opus-5` 于 2026-09-24 随 Opus 5.5 上线移入本表，尚未校验；其余 7 个 2026-09-17 已通过本机 Claude Code 逐个真实生成校验，确认回复内容和实际返回的模型 ID，无自动替换：
+
+| 旧版模型 ID | CLI effort | 关闭思考 |
+| --- | --- | --- |
+| `claude-opus-4-8` | `low/medium/high/xhigh/max` | 支持 |
+| `claude-opus-4-7` | `low/medium/high/xhigh/max` | 支持 |
+| `claude-opus-4-6` | `low/medium/high/max` | 支持 |
+| `claude-opus-4-5-20251101` | CLI 不提供 effort；使用固定预算 | 支持 |
+| `claude-sonnet-4-6` | `low/medium/high/max` | 支持 |
+| `claude-sonnet-4-5-20250929` | 固定预算 | 支持 |
+| `claude-fable-5` | `low/medium/high/xhigh/max` | 不支持 |
+| `claude-opus-5` | `low/medium/high/xhigh/max` | 支持，但不能同时指定 `xhigh`／`max` |
+
+`npm run models:check` 会对这 8 个模型分别执行一次简短的真实桥接生成，消耗当前账户额度；只保存模型 ID、实际 ID、校验状态、错误分类和时间。结果存于 `.runtime/model-checks.json`，启动和查询命令读取时，只采纳相同提供商下最近 24 小时（`claude.modelCheckMaxAgeHours`）的记录作为 `[已验证]` 标记，过期记录按 `[未验证]` 处理。这是最近调用记录，不保证配额或账号切换后仍可用；换账号后应重新校验。校验失败只标记“最近验证失败”，不直接认定模型已停用。
+
+以下模型已被 Anthropic 官方停用，默认不加入模型列表：Opus 4.1（2026-08-05），Opus 4／Sonnet 4（2026-06-15），Sonnet 3.7／Haiku 3.5（2026-02-19），Haiku 3（2026-04-20），Sonnet 3.5（2025-10-28），Opus 3（2026-01-05），Sonnet 3／Claude 2.x（2025-07-21），Claude 1.x／Instant（2024-11-06）。`npm run models -- --all` 或 `GET /v1/models?include_retired=1` 可查看包含这些模型完整 ID 和停用日期的目录。日期来源：[Anthropic 模型停用公告](https://platform.claude.com/docs/en/about-claude/model-deprecations)。这些生命周期规则仅用于 firstParty，第三方平台的停用时间可能不同。
+
+直接请求示例：
+
+```json
+{
+  "model": "sonnet",
+  "effort": "high",
+  "stream": true,
+  "messages": [{ "role": "user", "content": "继续我们的故事。" }]
+}
+```
+
+控制字段可采用下列方式：
+
+| 目的 | 请求字段 |
+| --- | --- |
+| 调整强度 | `"effort":"low"`，也接受 `medium/high/xhigh/max` |
+| 兼容 OpenAI 字段 | `"reasoning_effort":"high"`，与 `effort` 等价 |
+| 使用 CLI 默认强度 | `"effort":"auto"` |
+| 关闭思考 | `"effort":"none"`、`"effort":"off"`、`"thinking":false` 或 `"thinking":{"type":"disabled"}` |
+| 显式开启思考 | `"thinking":true` 或 `"thinking":{"type":"enabled"}` |
+| 固定思考预算（如 Haiku 4.5） | `"thinking":{"type":"enabled","budget_tokens":2048}`，同时确保 `max_tokens` 大于预算 |
+| 关闭思考但保留较低 effort | 如 Sonnet：`"effort":"low","thinking":false` |
+
+`effort` 与 `reasoning_effort` 同传时必须一致。关闭思考会向 CLI 子进程设置 `MAX_THINKING_TOKENS=0`；`none/off` 不是 CLI effort 档位，不会错误地传给 `--effort`。未指定 effort 的关闭请求使用 `high`，避免继承不兼容的高档位。显式参数会覆盖进程环境中的思考设置；所有子进程参数均按请求隔离，不修改全局 Claude 配置。
+
+不支持的档位、Opus 5.5／Fable／Mythos 关闭思考、Opus 5 `xhigh/max + thinking:false`、不合法预算或冲突参数返回 HTTP 400，不会偷偷降级。`MAX_THINKING_TOKENS=0` 在第三方提供商上不能保证真正关闭，因此只有已核实支持的 firstParty 模型开放关闭选项。
+
+前端可读取 `/v1/models` 中每个模型的 `effort_levels`、`can_disable_thinking` 等字段来决定显示哪些档位和开关。
+
+能力依据：[Claude Code 模型配置](https://code.claude.com/docs/en/model-config)、[Claude API effort](https://platform.claude.com/docs/en/build-with-claude/effort)、[Claude API thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)。本机 CLI 模型菜单中的 effort 列表优先于静态规则。
+
+## 上下文与能力
+
+- 支持流式 SSE、非流式 JSON、推理文本、Token 用量、取消生成、并发限制和错误返回。桥接器不对生成设置超时，请求会一直运行到 CLI 结束或客户端断开。
+- 每次使用当前请求的完整上下文启动独立 Claude Code 进程，不复用 CLI 会话；修改预设、切换角色、重生成、swipe 和回退分支不会带入上次隐藏历史。
+- 未命名的开头 system/developer 消息放入自定义 system prompt；示例名称、后续 system/developer 深度注入及所有历史消息保留顺序，以 JSON 对话记录通过 stdin 传入。中文、换行、长世界书不会受 Windows 命令行长度限制。
+- **这是提示词语义转换，不是原生多角色 API 透传**：CLI 只接收一次用户输入；后续 system 角色、示例角色与 assistant 前缀由说明引导模型理解。内容和顺序可验证，但指令优先级与续写效果不能保证与原生 Messages API 完全一致。
+- 末尾的 assistant 消息视为预填充前缀，通过提示要求续写、不重复，属于上述语义模拟。
+- `max_tokens` / `max_completion_tokens` 映射到 CLI 的 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`；实际限制仍取决于 Claude Code 版本、模型和推理开销。`effort` / `reasoning_effort` 映射到 `--effort` 与同值环境变量，按模型校验档位。
+- `stop` 在桥接层跨流式块匹配，命中后立即终止 CLI；这种提前终止拿不到最终用量，不伪造 usage。
+- **temperature、top_p、top_k、min_p、惩罚、seed、logprobs、logit_bias 不受 CLI 支持**。忽略项列在 `x-claude-bridge-ignored-parameters` 响应头，非流式还返回 `bridge.ignored_parameters`。
+- 当前只支持文本；图片、PDF、工具调用和结构化输出请求明确报错。
+- `/v1/models` 返回 CLI 当前账号菜单、别名、完整 ID 与仍在服务的旧版模型，包含 `context_length`、`resolved_model`、`source`、`lifecycle`、`availability`、`verified_at`、`actual_model`、`effort_levels`、`can_disable_thinking`、`thinking_off_unavailable_at`。前端的「测试连接」通常只请求模型列表，真正验证生成请运行 smoke 或 `models:check`。
 
 ## 配置
 
-编辑 `config.json` 后重启生效。
+所有设置集中在项目根目录的 `config.json`，直接用编辑器修改后重启桥接器生效。文件引用了 `config.schema.json`，在 VS Code 中编辑时有字段说明、补全和类型检查。启动时会严格校验：拼错的字段名、错误的类型或越界的数值都会直接报错并指出具体字段，不会被静默忽略。
 
-| 键 | 默认 | 说明 |
-| --- | --- | --- |
-| `host` / `port` | `127.0.0.1` / `5599` | 监听地址。要让局域网内其它设备连，改成 `0.0.0.0` |
-| `apiKey` | `""` | 设了就要求 `Authorization: Bearer <key>`，ST 里填到 Custom API Key |
-| `claudePath` | `"claude"` | 找不到时填 `claude.exe` 绝对路径 |
-| `defaultModel` | `claude-sonnet-5` | ST 没传模型时用它 |
-| `defaultEffort` | `""` | `low`/`medium`/`high`/`xhigh`/`max` |
-| `thinking` / `thinkingTokens` | `false` / `4000` | 扩展思考开关与预算 |
-| `reasoningPlaceholder` | `true` | 思维内容被加密时，推一条「思考已执行」的回执给 ST |
-| `maxTokensMode` / `minHardMaxTokens` | `auto` / `2048` | 见上一节 |
-| `applyStop` | `true` | 是否处理 ST 的停止序列 |
-| `images` | `true` | 是否支持图片附件 |
-| `streamReasoning` | `true` | 思考过程作为 `reasoning_content` 推给 ST（ST 会显示在思维折叠块里） |
-| `stripLeadingLabel` | `true` | 自动裁掉模型带出的 `小雾：` / `Assistant:` 前缀 |
-| `sessionMode` | `false` | 会话续接，只把新增的一轮发给 CLI 以命中前缀缓存。见上一节 |
-| `sessionMaxStates` | `12` | 最多保留几个可续接的状态，超出按最久未用淘汰 |
-| `sessionTtlMs` | `7200000` | 状态存活时间（2 小时），过期不再用于续接 |
-| `sessionCleanup` | `"off"` | 会话文件清理策略：`off`/`gc`/`all`，见上一节 |
-| `maxConcurrent` | `2` | 同时允许几个 `claude` 进程，超出的排队 |
-| `timeoutMs` | `600000` | 单次生成超时 |
-| `workDir` | `".sandbox"` | 子进程的工作目录，每次请求在其下建临时目录，用完删除 |
-| `extraArgs` | `[]` | 追加给 `claude` 的原始参数 |
-| `debug` / `logPrompts` / `logDir` | `false` | `debug` 会保留临时目录与打印摘要；`logPrompts` 把每次的 system/prompt 全文落盘到 `logs/` |
-| `systemPreamble` | 见文件 | 拼在 ST 预设**前面**的一段话，用来抹掉「编程助手」身份 |
-| `finalInstruction` / `prefillInstruction` / `transcriptHeader` / `roleLabels` | 见文件 | 对话记录的渲染模板，想改提示词风格改这里 |
-
-环境变量可覆盖：`BRIDGE_HOST`、`BRIDGE_PORT`、`BRIDGE_API_KEY`、`BRIDGE_MODEL`、`BRIDGE_CLAUDE_PATH`、`BRIDGE_DEBUG`、`BRIDGE_SESSION_MODE`。
-
----
-
-## 已知限制
-
-- **`temperature` / `top_p` / `top_k` / `presence_penalty` / `frequency_penalty` / `seed` / `logit_bias` 全部无效**——
-  `claude -p` 没有对应参数，ST 里调了也不会有任何作用。这是 CLI 的能力边界，不是桥接的取舍。
-- **不支持工具调用 / function calling**，ST 送来的 `tools` 会被忽略。
-- **计费与额度走 Claude Code 账号**，不是 API Key 计费；额度耗尽时 CLI 会报错，桥接原样透传给 ST。
-- 默认每次请求都是全新会话，因为 ST 每轮都会重发完整上下文。想让历史命中前缀缓存，
-  见[会话续接](#会话续接sessionmode默认关闭)。
-- 子进程的工作目录在 `workDir` 下。如果你在仓库根目录里放了 `CLAUDE.md`，它会被 CLI 自动读入并污染人设——别放。
-
----
-
-## 自检
+取值优先级：**环境变量（含 `.env`）> `config.json` > 内置默认值**。环境变量覆盖了 `config.json` 中已写的值时，启动日志和 `npm run doctor` 会提示。`.env.example` 中的变量默认全部注释，只在需要临时覆盖时使用；空值视为未设置。`BRIDGE_CONFIG` 可指向另一份配置文件（相对路径以项目目录为基准）。
 
 ```powershell
-node scripts\unit.js      # 纯逻辑单测，不花钱
-node scripts\selftest.js  # 端到端：拉起服务，跑 /models + 非流式 + 流式(带预填充和停止序列)
+npm run config                # 查看生效配置与来源（API Key 打码）
+npm run config -- --init      # config.json 丢失时按默认值重建（不会覆盖已有文件）
+npm run config -- --schema    # 修改 src/config.js 的 SETTINGS 后重新生成 schema
 ```
 
----
+| config.json 字段 | 环境变量 | 默认值 / 用途 |
+| --- | --- | --- |
+| `server.host` | `BRIDGE_HOST` | `127.0.0.1`，默认仅本机；非回环地址必须设置 `apiKey` |
+| `server.port` | `BRIDGE_PORT` | `8788` |
+| `server.apiKey` | `BRIDGE_API_KEY` | 空；可选桥接 Bearer token，前端连接中填相同值 |
+| `server.maxConcurrent` | `BRIDGE_MAX_CONCURRENT` | `2`（1–16）；满载返回 429 |
+| `server.maxBodyBytes` | `BRIDGE_MAX_BODY_BYTES` | `8388608`，超过返回 413 |
+| `server.allowedOrigins` | — | `[]`；允许浏览器页面直接跨域访问的 Origin，精确匹配，如 `http://127.0.0.1:8000`。前端经自己的服务端转发时不需要 |
+| `server.heartbeatSeconds` | — | `10`，流式 keep-alive 间隔 |
+| `server.retryAfterSeconds` | — | `3`，429 响应的 Retry-After |
+| `server.logRequests` | — | `true`，记录请求 ID、模型、状态和耗时（从不记录正文） |
+| `claude.bin` | `CLAUDE_BIN` | 空 = 自动寻找 `~/.local/bin/claude.exe` 或 PATH 中的 claude |
+| `claude.defaultModel` | `CLAUDE_MODEL` | `sonnet`，请求未指定 model 时使用 |
+| `claude.extraModels` | `BRIDGE_MODELS`（逗号分隔） | `["sonnet","opus","haiku"]`；在自动发现列表之外追加，不验证账户权限 |
+| `claude.discoveryTimeoutSeconds` | — | `15`，启动时读取模型菜单的超时 |
+| `claude.modelCheckMaxAgeHours` | — | `24`，`models:check` 结果视为「已验证」的有效期 |
 
-## 排错
+`config.json` 默认不含任何密钥；如果在其中填写了 `server.apiKey`，不要把它提交到公开仓库，或改用 `.env` 中的 `BRIDGE_API_KEY`。
 
-| 现象 | 原因 / 处理 |
-| --- | --- |
-| ST 点 Connect 报错 | 先浏览器打开 `http://127.0.0.1:5599/health`，能出 JSON 说明服务活着；确认 Base URL 结尾是 `/v1` |
-| 启动就退出，说找不到 CLI | `config.json` 的 `claudePath` 填 `claude.exe` 绝对路径（`(Get-Command claude).Source` 可查） |
-| 回复里带「Assistant:」前缀 | 应该已被自动裁掉；若是别的标签，把它加进 `roleLabels` 或角色卡的 name |
-| 回复被莫名截断 | 检查 ST 的停止序列（Custom 源里可自定义），以及 `max_tokens` 是否被设成了很小的值 |
-| 回复很慢、烧 token 很多 | 确认没打开 `thinking`，也没在模型名里带 `:think` |
-| 想看到底发了什么给模型 | `config.json` 里 `"logPrompts": true`，然后看 `logs/prompt-*.txt` |
+使用 Claude Code 2.1.274 起实测。CLI 须支持 `--safe-mode`、`--system-prompt-file`、`--include-partial-messages` 等参数；旧版本需升级。Windows 下 `claude.bin` 应指向原生 `.exe`，本项目不通过 shell 执行 `.cmd` 或拼接命令。
 
----
+## 验证
 
-## 许可
+```powershell
+npm test                         # 无模型调用，单元/HTTP/进程生命周期测试
+npm run doctor                   # 配置文件、本机 CLI 安装与登录状态，不打印邮箱或凭据
+npm run models                   # 实时读取 CLI 菜单和 effort/关闭思考能力
+npm run models -- --all          # 同时列出已停用模型完整 ID
+npm run models:check             # 对 8 个仍在服务的旧版逐个真实生成校验
+npm run smoke                    # 真实 Claude Code 流式生成，需要桥接器已启动
+npm run smoke:thinking           # 真实模型 effort/关闭验证；任一生成失败返回非零
+```
 
-MIT，见 [LICENSE](LICENSE)。
+`smoke` 会校验角色名、用户身份、世界书地点和作者注释校验码是否都被模型正确使用。`smoke`、`smoke:thinking` 和 `models:check` 都会消耗当前登录账户的额度。`smoke:thinking` 仍按 Haiku 4.5 的能力编写，CLI 将 `haiku` 解析为 Haiku 5.5 后，其中 Haiku 相关的断言可能失败。
 
-本项目是个人自用的非官方小工具，与 Anthropic 和 SillyTavern 均无关联。
-它只是在本机调用你自己已登录的 `claude` CLI，用量与计费都走你自己的 Claude Code 账号，
-请自行确认符合你所用服务的条款。
+接口：`GET /health`、`GET /v1/models`、`POST /v1/chat/completions`（同时支持无 `/v1` 前缀）。`/health` 表示桥接进程存活，不代表 Claude 登录有效。
+
+## 进程与隐私
+
+CLI 在独立临时目录运行，关闭工具、MCP、自定义技能及会话持久化，使用 safe mode 隔离本机项目指令。桥接器不记录提示词、正文或凭据；只记录请求 ID、模型、耗时和状态。临时 system prompt 文件在完成、取消或错误后删除；突然断电或强杀整个桥接进程可能留下系统临时文件。
+
+每次回复仍会把上下文发送到 Claude Code 当前登录的模型服务，遵循该账户的配额与模型可用性。停止桥接器可在运行终端按 Ctrl+C。默认只允许本机访问；不必将桥接器暴露到局域网。
+
+## 许可证
+
+MIT

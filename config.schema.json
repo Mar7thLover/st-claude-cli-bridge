@@ -1,0 +1,117 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ClaudeBridge config.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "监听地址。默认仅本机；绑定非回环地址（如 0.0.0.0）时必须设置 server.apiKey。\n环境变量 BRIDGE_HOST 优先于此项。"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8788,
+          "description": "监听端口。\n环境变量 BRIDGE_PORT 优先于此项。"
+        },
+        "apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "可选的桥接 Bearer token；留空则不校验。前端连接中填相同值。填写后不要把本文件提交到公开仓库。\n环境变量 BRIDGE_API_KEY 优先于此项。"
+        },
+        "maxConcurrent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 2,
+          "description": "同时运行的 Claude Code 生成数；满载返回 429。\n环境变量 BRIDGE_MAX_CONCURRENT 优先于此项。"
+        },
+        "maxBodyBytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 67108864,
+          "default": 8388608,
+          "description": "请求体上限（字节），超过返回 413。\n环境变量 BRIDGE_MAX_BODY_BYTES 优先于此项。"
+        },
+        "allowedOrigins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "允许浏览器页面直接跨域访问的 Origin（协议+主机+端口，精确匹配），如 http://127.0.0.1:8000。前端经自己的服务端转发请求时不需要；默认不允许任何浏览器直连。"
+        },
+        "heartbeatSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300,
+          "default": 10,
+          "description": "流式响应空闲时发送 SSE keep-alive 注释的间隔（秒）。"
+        },
+        "retryAfterSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 3,
+          "description": "并发满载时 Retry-After 响应头的秒数。"
+        },
+        "logRequests": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否在控制台记录每个请求的 ID、模型、状态和耗时（从不记录提示词或正文）。"
+        }
+      }
+    },
+    "claude": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bin": {
+          "type": "string",
+          "default": "",
+          "description": "Claude Code 可执行文件。留空自动寻找 ~/.local/bin/claude.exe 或 PATH 中的 claude；相对路径以项目目录为基准。Windows 下应指向原生 .exe。\n环境变量 CLAUDE_BIN 优先于此项。"
+        },
+        "defaultModel": {
+          "type": "string",
+          "default": "sonnet",
+          "description": "请求未指定 model 时使用的模型。\n环境变量 CLAUDE_MODEL 优先于此项。"
+        },
+        "extraModels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "sonnet",
+            "opus",
+            "haiku"
+          ],
+          "description": "在自动发现的模型菜单之外追加的模型 ID；追加项不验证账户权限。环境变量形式用逗号分隔。\n环境变量 BRIDGE_MODELS 优先于此项。"
+        },
+        "discoveryTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300,
+          "default": 15,
+          "description": "启动时向 Claude Code 读取模型菜单的超时（秒）。"
+        },
+        "modelCheckMaxAgeHours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8760,
+          "default": 24,
+          "description": "npm run models:check 结果作为「已验证」的有效期（小时）。"
+        }
+      }
+    }
+  }
+}

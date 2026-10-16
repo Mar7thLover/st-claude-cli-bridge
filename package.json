@@ -1,30 +1,19 @@
 {
-  "name": "st-claude-cli-bridge",
-  "version": "1.0.0",
+  "name": "claude-cli-bridge",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "把 Claude CLI (claude -p) 包装成 OpenAI 兼容端点，供 SillyTavern 的 Custom (OpenAI-compatible) 源调用",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Mar7thLover/st-claude-cli-bridge.git"
-  },
-  "keywords": [
-    "sillytavern",
-    "claude",
-    "claude-code",
-    "openai-compatible",
-    "bridge",
-    "proxy"
-  ],
-  "main": "src/server.js",
+  "description": "OpenAI Chat Completions compatible bridge to the locally authenticated Claude Code CLI",
+  "engines": { "node": ">=22" },
   "scripts": {
-    "start": "node src/server.js",
-    "test": "node scripts/unit.js",
-    "test:cli": "node scripts/selftest.js"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "dependencies": {}
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test test/*.test.js",
+    "doctor": "node scripts/doctor.js",
+    "config": "node scripts/config.js",
+    "models": "node scripts/models.js",
+    "models:check": "node scripts/check-historical-models.js",
+    "smoke": "node scripts/smoke.js",
+    "smoke:thinking": "node scripts/smoke-thinking.js"
+  }
 }
