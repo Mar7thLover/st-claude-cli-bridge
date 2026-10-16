@@ -5,7 +5,7 @@ loadEnv();
 const config = getConfig();
 const response = await fetch(`${localUrl(config)}/v1/chat/completions`, {
   method: 'POST', headers: { 'content-type': 'application/json', ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}) },
-  body: JSON.stringify({ model: config.defaultModel, stream: true, max_tokens: 256, stream_options: { include_usage: true }, messages: [
+  body: JSON.stringify({ model: process.env.SMOKE_MODEL || config.defaultModel, ...(process.env.SMOKE_EFFORT ? { effort: process.env.SMOKE_EFFORT } : {}), stream: true, max_tokens: 256, stream_options: { include_usage: true }, messages: [
     { role: 'system', content: '角色卡：你叫星璃，是一名图书管理员。预设：用中文回复，只输出请求的内容，不加解释。' },
     { role: 'user', content: '记住，我叫旅人。' },
     { role: 'assistant', content: '记住了，旅人。' },

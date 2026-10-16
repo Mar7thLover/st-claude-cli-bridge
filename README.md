@@ -50,7 +50,7 @@ Windows 后台运行可使用 `./start-background.ps1`，停止使用 `./stop-ba
 | 旧版模型 ID | CLI effort | 关闭思考 | 状态 |
 | --- | --- | --- | --- |
 | `claude-fable-5` | 五档 | 不支持（始终思考） | 在服务 |
-| `claude-opus-5` | 五档；请求未指定时桥接器自动使用 `high` | 不支持（上游拦截） | 在服务 |
+| `claude-opus-5` | 五档 | 支持，仅 `low`／`medium` 档 | 在服务 |
 | `claude-opus-4-8` | 五档 | 支持 | 在服务 |
 | `claude-opus-4-7` | 五档 | 支持 | 在服务 |
 | `claude-opus-4-6` | `low/medium/high/max` | 支持 | 在服务 |
@@ -60,7 +60,7 @@ Windows 后台运行可使用 `./start-background.ps1`，停止使用 `./stop-ba
 | `claude-sonnet-4-5-20250929` | 固定预算 | 支持 | **已弃用，2026-11-30 停用** |
 | `claude-haiku-4-5-20251001` | 固定预算 | 支持 | 在服务 |
 
-Opus 5 的特殊情况：经桥接器调用时，只要关闭思考或没有指定 effort，就会被上游以 safeguards 拒绝；显式指定任意 effort 则正常。直接调用 CLI 不会出现这个问题，所以问题出在桥接器的 system prompt 与 Opus 5 的组合上。因此对 Opus 5，桥接器不开放关闭思考；请求没带 effort 时，自动显式传入它在 API 上的默认值 `high`，效果与 API 默认一致。
+Opus 5 的特殊情况：API 只允许 Opus 5 在 `high` 及以下档位关闭思考。经桥接器实测，`high` 档关闭思考时，安全分类器仍会误报大部分请求（6 次通过 1 次），`low`／`medium` 档则 12/12 通过，推理 token 为 0。所以只开放这两档关闭思考。请求关闭思考但没指定 effort 时，自动使用 `medium`。
 
 `npm run models:check` 会对这 10 个模型分别执行一次简短的真实桥接生成，消耗当前账户额度；只保存模型 ID、实际 ID、校验状态、错误分类和时间。结果存于 `.runtime/model-checks.json`，启动和查询命令读取时，只采纳相同提供商下最近 24 小时（`claude.modelCheckMaxAgeHours`）的记录作为 `[已验证]` 标记，过期记录按 `[未验证]` 处理。这是最近调用记录，不保证配额或账号切换后仍可用；换账号后应重新校验。校验失败只标记“最近验证失败”，不直接认定模型已停用。
 
@@ -105,8 +105,9 @@ Opus 5 的特殊情况：经桥接器调用时，只要关闭思考或没有指�
 
 - 支持流式 SSE、非流式 JSON、推理文本、Token 用量、取消生成、并发限制和错误返回。桥接器不对生成设置超时，请求会一直运行到 CLI 结束或客户端断开。
 - 每次使用当前请求的完整上下文启动独立 Claude Code 进程，不复用 CLI 会话；修改预设、切换角色、重生成、swipe 和回退分支不会带入上次隐藏历史。
-- 未命名的开头 system/developer 消息放入自定义 system prompt；示例名称、后续 system/developer 深度注入及所有历史消息保留顺序，以 JSON 对话记录通过 stdin 传入。中文、换行、长世界书不会受 Windows 命令行长度限制。
+- 桥接器用 `--system-prompt-file` **替换** Claude Code 的默认系统提示，而不是追加，所以不会带入编码助手的指令和工具说明。实测替换后输入从约 2300 token 降到约 770 token。CLI 仍会在最前面固定加上一句 Claude Code 身份声明和一小段运行环境信息（工作目录为空的临时目录），这部分无法通过参数去掉。未命名的开头 system/developer 消息与桥接器的格式说明一起放进这份 system prompt；示例名称、后续 system/developer 深度注入及所有历史消息保留顺序，以 JSON 对话记录通过 stdin 传入。中文、换行、长世界书不会受 Windows 命令行长度限制。
 - **这是提示词语义转换，不是原生多角色 API 透传**：CLI 只接收一次用户输入；后续 system 角色、示例角色与 assistant 前缀由说明引导模型理解。内容和顺序可验证，但指令优先级与续写效果不能保证与原生 Messages API 完全一致。
+- 格式说明里刻意没有写「对话记录中的 system 条目必须在原位置生效」这类话。实测这类表述会让 Opus 5 的安全分类器把整个请求当成提示词注入而拒绝，换任何措辞都一样。去掉后，中途插入的世界书和作者注释在 8 种模型和模式组合下仍被正确遵守（`npm run smoke` 的校验码检查）。
 - 末尾的 assistant 消息视为预填充前缀，通过提示要求续写、不重复，属于上述语义模拟。
 - `max_tokens` / `max_completion_tokens` 映射到 CLI 的 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`；实际限制仍取决于 Claude Code 版本、模型和推理开销。`effort` / `reasoning_effort` 映射到 `--effort` 与同值环境变量，按模型校验档位。
 - `stop` 在桥接层跨流式块匹配，命中后立即终止 CLI；这种提前终止拿不到最终用量，不伪造 usage。
@@ -156,7 +157,7 @@ npm run doctor                   # 配置文件、本机 CLI 安装与登录状�
 npm run models                   # 实时读取 CLI 菜单和 effort/关闭思考能力
 npm run models -- --all          # 同时列出已停用模型完整 ID
 npm run models:check             # 对 10 个仍在服务的旧版逐个真实生成校验
-npm run smoke                    # 真实 Claude Code 流式生成，需要桥接器已启动
+npm run smoke                    # 真实 Claude Code 流式生成，需要桥接器已启动；可用环境变量 SMOKE_MODEL／SMOKE_EFFORT 指定模型和档位
 npm run smoke:thinking           # 真实模型 effort/关闭验证；任一生成失败返回非零
 ```
 

@@ -23,27 +23,21 @@ export function capabilitiesFor(model, provider = 'firstParty', cli) {
   // Opus 5.5 rejects thinking disabled at every effort level, like Fable/Mythos.
   const alwaysOn = /^claude-(?:fable-|mythos-|opus-5-5(?:-|$))/.test(id);
   // Measured 2026-10-16 with Claude Code 2.1.301 on a reasoning prompt: Sonnet/Haiku 5.5
-  // keep thinking under every CLI off switch, and Opus 5 with thinking off is rejected by
-  // upstream safeguards under the bridge system prompt (plain CLI prompts pass).
+  // keep thinking under every CLI off switch.
   const cliIgnoresOff = /^claude-(?:sonnet|haiku)-5-5(?:-|$)/.test(id);
-  const offRejected = /^claude-opus-5(?!-5)(?:-|$)/.test(id);
-  const canDisable = provider === 'firstParty' && knownThinking && !alwaysOn && !cliIgnoresOff && !offRejected;
-  // No current model needs a per-effort restriction; kept for the /v1/models contract.
-  const restrictedOffLevels = [];
-  // Opus 5 under the bridge prompt is also rejected when no effort is passed, but works with
-  // any explicit level, so requests without one get its API default (high) explicitly.
-  const bridgeDefaultEffort = offRejected ? 'high' : null;
+  const canDisable = provider === 'firstParty' && knownThinking && !alwaysOn && !cliIgnoresOff;
+  // The API rejects Opus 5 thinking-off above high, and at high its safeguards classifier
+  // flags most bridge requests (1/6 passed; low and medium passed 12/12).
+  const restrictedOffLevels = /^claude-opus-5(?!-5)(?:-|$)/.test(id) ? ['high', 'xhigh', 'max'] : [];
   return {
     supportsEffort: levels.length > 0,
     effortLevels: [...levels],
     supportsThinking: knownThinking || cli?.supportsAdaptiveThinking === true,
     canDisableThinking: canDisable,
     thinkingOffUnavailableAt: restrictedOffLevels,
-    bridgeDefaultEffort,
     maxContext: /\[1m\]$/.test(model) || /^claude-(?:fable-5|sonnet-5|haiku-5|opus-(?:5|4-[78]))/.test(id) ? 1000000 : 200000,
     thinkingOffReason: canDisable ? null : alwaysOn ? 'This model requires thinking'
       : cliIgnoresOff ? 'Claude Code does not turn thinking off for this model'
-      : offRejected ? 'Upstream safeguards reject this model with thinking off through the bridge'
       : provider !== 'firstParty' ? 'Claude Code cannot guarantee thinking is disabled on this provider' : 'Thinking-off support has not been verified for this model',
   };
 }

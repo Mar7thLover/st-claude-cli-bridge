@@ -12,6 +12,7 @@ const tests = [
   { control: { model: 'fable', effort: 'low' }, prompt: '请只回复：OK', expect: 'OK' },
   { control: { model: 'claude-sonnet-5', effort: 'none' }, prompt: reasoningPrompt, expect: '93', off: true },
   { control: { model: 'claude-haiku-4-5-20251001', thinking: { type: 'disabled' } }, prompt: reasoningPrompt, expect: '93', off: true },
+  { control: { model: 'claude-opus-5', effort: 'none' }, prompt: reasoningPrompt, expect: '93', off: true },
 ];
 let failures = 0;
 for (const { control, prompt, expect, off } of tests) {
@@ -35,6 +36,7 @@ for (const { control, prompt, expect, off } of tests) {
 for (const control of [
   { model: 'fable', effort: 'off' },
   { model: 'opus', thinking: false },
+  { model: 'claude-opus-5', effort: 'high', thinking: false },
   { model: 'sonnet', thinking: false },
   { model: 'haiku', effort: 'none' },
   { model: 'haiku', max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: 2048 } },

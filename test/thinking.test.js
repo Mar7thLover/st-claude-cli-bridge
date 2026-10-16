@@ -48,11 +48,15 @@ test('thinking can be disabled only where it actually works through Claude Code'
   }
   assert.throws(() => request({ effort: 'off', thinking: true }), /conflict/);
   assert.throws(() => request({ thinking: { enabled: true, type: 'disabled' } }), /conflict/);
-  // Opus 5 can turn thinking off in the CLI, but upstream safeguards reject it under the bridge prompt.
+  // Opus 5 turns thinking off at low/medium; at high the upstream classifier flags most requests.
   for (const model of ['opus', 'default', 'claude-opus-5[1m]']) {
-    assert.equal(request({ model, effort: 'high' }).effort, 'high');
-    assert.throws(() => request({ model, effort: 'high', thinking: false }), /safeguards/);
+    assert.equal(request({ model, effort: 'medium', thinking: false }).thinking, 'disabled');
+    assert.equal(request({ model, effort: 'low', thinking: false }).effort, 'low');
+    for (const effort of ['high', 'xhigh', 'max']) assert.throws(() => request({ model, effort, thinking: false }), /choose low, medium$/);
+    // Without an effort, thinking-off picks the highest level that works instead of high.
+    assert.equal(request({ model, thinking: false }).effort, 'medium');
   }
+  assert.equal(request({ effort: 'none' }).effort, undefined);
   assert.throws(() => request({ model: 'custom-model', thinking: false }), /not been verified/);
 });
 
@@ -103,7 +107,7 @@ test('catalog exposes full effort levels, model-specific off switch and Haiku bu
   assert.equal(caps('claude-opus-5[1m]').maxContext, 1000000);
 });
 
-test('Opus 5.5 keeps thinking on at every effort; Opus 5 thinking-off is not offered', () => {
+test('Opus 5.5 keeps thinking on at every effort; Opus 5 turns it off at low or medium', () => {
   const opus55 = buildModelCatalog([
     { value: 'default', resolvedModel: 'claude-opus-5-5[1m]', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
   ]);
@@ -116,14 +120,11 @@ test('Opus 5.5 keeps thinking on at every effort; Opus 5 thinking-off is not off
   }
   assert.equal(capabilitiesFor('claude-opus-5-5').maxContext, 1000000);
   assert.deepEqual(capabilitiesFor('claude-opus-5-5').thinkingOffUnavailableAt, []);
-  assert.equal(capabilitiesFor('claude-opus-5').canDisableThinking, false);
-  // Opus 5 is only reliable through the bridge with an explicit effort.
+  assert.equal(capabilitiesFor('claude-opus-5').canDisableThinking, true);
+  assert.deepEqual(capabilitiesFor('claude-opus-5').thinkingOffUnavailableAt, ['high', 'xhigh', 'max']);
+  // With the injection-free protocol, Opus 5 no longer needs a forced effort when thinking stays on.
   const opus5 = { ...getConfig({}, null), modelCatalog: buildModelCatalog(), models: [] };
-  const opus5Request = patch => normalizeRequest({ model: 'claude-opus-5', messages: [{ role: 'user', content: 'hi' }], ...patch }, opus5);
-  assert.equal(opus5Request({}).effort, 'high');
-  assert.equal(opus5Request({ effort: 'auto' }).effort, 'high');
-  assert.equal(opus5Request({ effort: 'low' }).effort, 'low');
-  assert.equal(normalizeRequest({ model: 'claude-opus-4-8', messages: [{ role: 'user', content: 'hi' }] }, opus5).effort, undefined);
+  assert.equal(normalizeRequest({ model: 'claude-opus-5', messages: [{ role: 'user', content: 'hi' }] }, opus5).effort, undefined);
 });
 
 test('Sonnet 5.5 and Haiku 5.5 match the live CLI menu and measured thinking behaviour', () => {

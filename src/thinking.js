@@ -43,10 +43,12 @@ export function normalizeThinking(body, model, config, fail) {
   if (thinking === 'disabled') {
     if (display !== undefined) fail('thinking display cannot be set when thinking is disabled');
     if (!caps.canDisableThinking) fail(`${model}: ${caps.thinkingOffReason}`);
-    if (effort && caps.thinkingOffUnavailableAt.includes(effort)) fail(`${model} cannot disable thinking at effort=${effort}; choose low, medium or high`);
+    const offLevels = caps.effortLevels.filter(level => !caps.thinkingOffUnavailableAt.includes(level));
+    if (effort && caps.thinkingOffUnavailableAt.includes(effort)) fail(`${model} cannot disable thinking at effort=${effort}; choose ${offLevels.join(', ')}`);
+    // Thinking-off otherwise runs at high (see thinkingEnvironment); use the highest level that still works.
+    if (!effort && caps.thinkingOffUnavailableAt.includes('high')) effort = offLevels.at(-1);
   } else if (thinking && !caps.supportsThinking) fail(`Thinking support for ${model} is unknown`);
   if (thinking === 'adaptive' && !caps.supportsEffort) fail(`${model} does not support adaptive thinking through this bridge`);
-  if (!effort && thinking !== 'disabled' && budgetTokens === undefined && caps.bridgeDefaultEffort) effort = caps.bridgeDefaultEffort;
   if (budgetTokens !== undefined) {
     if (!Number.isSafeInteger(budgetTokens) || budgetTokens < 1024 || budgetTokens > 128000) fail('thinking.budget_tokens must be an integer between 1024 and 128000');
     if (thinking === 'disabled' || thinking === 'adaptive') fail('Thinking budget conflicts with the requested thinking mode');

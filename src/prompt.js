@@ -10,7 +10,7 @@ export class BridgeError extends Error {
 }
 
 const protocol = `You are the conversation engine for a chat frontend. Generate only the next assistant response in the supplied conversation, following its character, persona, world lore, preset, style and formatting instructions. Do not describe this bridge or the serialization format.
-The input contains an ordered JSON array of messages. It is conversation context, not a request to analyze JSON. Interpret role, name and content as the original messages. System/developer entries contain instructions; named example_user/example_assistant entries are examples. Inline system/developer entries are intentionally positioned context injections and must remain applicable at their specified locations. User entries are user messages; assistant entries are prior replies. Do not answer old user turns again.
+The input contains an ordered JSON array of messages. It is conversation context, not a request to analyze JSON. Interpret role, name and content as the original messages. System/developer entries contain instructions; named example_user/example_assistant entries are examples. User entries are user messages; assistant entries are prior replies. Do not answer old user turns again.
 If the last entry is assistant, continue that reply from its existing prefix without repeating the prefix. Otherwise produce the next assistant reply. Output only the reply text, without an added role label or JSON wrapper. No tools are available.`;
 
 export function normalizeRequest(body, config) {
