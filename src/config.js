@@ -28,16 +28,19 @@ export const SETTINGS = [
   { key: 'claude.extraModels', env: 'BRIDGE_MODELS', type: 'string[]', default: ['sonnet', 'opus', 'haiku'], description: '在自动发现的模型菜单之外追加的模型 ID；追加项不验证账户权限。环境变量形式用逗号分隔。' },
   { key: 'claude.discoveryTimeoutSeconds', type: 'integer', min: 1, max: 300, default: 15, description: '启动时向 Claude Code 读取模型菜单的超时（秒）。' },
   { key: 'claude.modelCheckMaxAgeHours', type: 'integer', min: 1, max: 8760, default: 24, description: 'npm run models:check 结果作为「已验证」的有效期（小时）。' },
+  { key: 'claude.thinkingDisplay', type: 'string', values: ['summarized', 'omitted'], default: 'summarized', description: '思维链返回方式。summarized：返回模型思维的总结文本（作为 reasoning_content 输出）；omitted：不返回思维文本（Claude 5 系列在 CLI 中的默认行为）。请求中的 thinking_display 或 thinking.display 优先于此项。' },
 ];
 
 export class ConfigError extends Error {}
 
 function typeHint(setting) {
+  if (setting.values) return `one of: ${setting.values.join(', ')}`;
   if (setting.type === 'integer') return `an integer between ${setting.min} and ${setting.max}`;
   return { string: 'a string', boolean: 'true or false', 'string[]': 'an array of strings' }[setting.type];
 }
 
 function checkValue(setting, value) {
+  if (setting.values) return setting.values.includes(value);
   if (setting.type === 'integer') return Number.isSafeInteger(value) && value >= setting.min && value <= setting.max;
   if (setting.type === 'string[]') return Array.isArray(value) && value.every(item => typeof item === 'string');
   return typeof value === setting.type;
@@ -146,6 +149,7 @@ export function getConfig(env = process.env, file = readConfigFile(env)) {
     logRequests: v['server.logRequests'],
     discoveryTimeoutMs: v['claude.discoveryTimeoutSeconds'] * 1000,
     modelCheckMaxAgeMs: v['claude.modelCheckMaxAgeHours'] * 3600000,
+    thinkingDisplay: v['claude.thinkingDisplay'],
     configFile: file?.path || null,
     envOverrides,
   };
@@ -175,7 +179,7 @@ export function configSchema() {
     properties[section] ??= { type: 'object', additionalProperties: false, properties: {} };
     const description = setting.env ? `${setting.description}\n环境变量 ${setting.env} 优先于此项。` : setting.description;
     const type = setting.type === 'string[]' ? { type: 'array', items: { type: 'string' } } : { type: setting.type };
-    const range = setting.type === 'integer' ? { minimum: setting.min, maximum: setting.max } : {};
+    const range = setting.type === 'integer' ? { minimum: setting.min, maximum: setting.max } : setting.values ? { enum: setting.values } : {};
     properties[section].properties[name] = { ...type, ...range, default: setting.default, description };
   }
   return { $schema: 'http://json-schema.org/draft-07/schema#', title: 'ClaudeBridge config.json', type: 'object', additionalProperties: false, properties };

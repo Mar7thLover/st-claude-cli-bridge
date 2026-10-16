@@ -36,6 +36,8 @@ export async function* runClaude(request, config, signal, { spawnProcess = spawn
     ];
     if (request.effort) args.push('--effort', request.effort);
     if (request.thinking && request.thinking !== 'disabled') args.push('--settings', JSON.stringify({ alwaysThinkingEnabled: true }));
+    // Claude 5 models omit thinking text unless a display mode is requested explicitly.
+    if (request.thinkingDisplay) args.push('--thinking-display', request.thinkingDisplay);
     const env = thinkingEnvironment(request, { ...process.env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' });
     delete env.CLAUDECODE;
     if (request.maxTokens !== undefined) env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(request.maxTokens);
@@ -73,7 +75,8 @@ export async function* runClaude(request, config, signal, { spawnProcess = spawn
             yield { type: 'text', text: event.delta.text };
           } else if (event.delta?.type === 'thinking_delta') {
             sawThinkingDelta = true;
-            yield { type: 'reasoning', text: event.delta.thinking };
+            // Omitted thinking streams empty deltas; forwarding them shows an empty placeholder.
+            if (event.delta.thinking) yield { type: 'reasoning', text: event.delta.thinking };
           }
         } else if (event?.type === 'message_delta' && event.delta?.stop_reason === 'max_tokens') finishReason = 'length';
       } else if (item.type === 'assistant') {
@@ -89,7 +92,7 @@ export async function* runClaude(request, config, signal, { spawnProcess = spawn
           if (block.type === 'text' && !sawTextDelta) {
             sawAssistantText = true;
             yield { type: 'text', text: block.text };
-          } else if (block.type === 'thinking' && !sawThinkingDelta) yield { type: 'reasoning', text: block.thinking };
+          } else if (block.type === 'thinking' && block.thinking && !sawThinkingDelta) yield { type: 'reasoning', text: block.thinking };
         }
       } else if (item.type === 'result') {
         result = item;

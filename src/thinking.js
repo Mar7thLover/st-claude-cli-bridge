@@ -1,5 +1,7 @@
 import { modelInfo, EFFORT_LEVELS } from './models.js';
 
+export const THINKING_DISPLAYS = ['summarized', 'omitted'];
+
 // Keep this independent of prompt.js to avoid a circular dependency.
 export function normalizeThinking(body, model, config, fail) {
   const canonical = value => ['off', 'none'].includes(value) ? 'none' : value === 'auto' ? undefined : value;
@@ -10,11 +12,12 @@ export function normalizeThinking(body, model, config, fail) {
   let effort = canonical(body.effort ?? body.reasoning_effort);
   let thinking;
   let budgetTokens;
+  let display;
   if (body.thinking !== undefined) {
     if (typeof body.thinking === 'boolean') thinking = body.thinking ? 'enabled' : 'disabled';
     else if (body.thinking && typeof body.thinking === 'object' && !Array.isArray(body.thinking)) {
       const value = body.thinking;
-      if (Object.keys(value).some(key => !['type', 'enabled', 'budget_tokens', 'budgetTokens'].includes(key))) fail('Unsupported thinking field');
+      if (Object.keys(value).some(key => !['type', 'enabled', 'budget_tokens', 'budgetTokens', 'display'].includes(key))) fail('Unsupported thinking field');
       if (value.type !== undefined && !['enabled', 'disabled', 'adaptive'].includes(value.type)) fail('thinking.type must be enabled, disabled or adaptive');
       if (value.enabled !== undefined && typeof value.enabled !== 'boolean') fail('thinking.enabled must be boolean');
       const fromEnabled = value.enabled === undefined ? undefined : value.enabled ? 'enabled' : 'disabled';
@@ -22,9 +25,15 @@ export function normalizeThinking(body, model, config, fail) {
       thinking = value.type ?? fromEnabled;
       if (value.budget_tokens !== undefined && value.budgetTokens !== undefined && value.budget_tokens !== value.budgetTokens) fail('Thinking budgets conflict');
       budgetTokens = value.budget_tokens ?? value.budgetTokens;
-      if (!thinking && budgetTokens === undefined) fail('thinking needs type, enabled or budget_tokens');
+      display = value.display;
+      if (!thinking && budgetTokens === undefined && display === undefined) fail('thinking needs type, enabled, budget_tokens or display');
     } else fail('thinking must be a boolean or object');
   }
+  for (const [key, value] of [['thinking.display', display], ['thinking_display', body.thinking_display]]) {
+    if (value !== undefined && !THINKING_DISPLAYS.includes(value)) fail(`${key} must be ${THINKING_DISPLAYS.join(' or ')}`);
+  }
+  if (display !== undefined && body.thinking_display !== undefined && display !== body.thinking_display) fail('thinking.display and thinking_display conflict');
+  display ??= body.thinking_display;
   if (effort === 'none') {
     if (thinking && thinking !== 'disabled') fail('effort=none/off conflicts with enabled thinking');
     thinking = 'disabled'; effort = undefined;
@@ -32,6 +41,7 @@ export function normalizeThinking(body, model, config, fail) {
   const caps = modelInfo(model, config);
   if (effort && !caps.effortLevels.includes(effort)) fail(`${model} supports effort levels: ${caps.effortLevels.join(', ') || 'none (effort is not supported)'}`);
   if (thinking === 'disabled') {
+    if (display !== undefined) fail('thinking display cannot be set when thinking is disabled');
     if (!caps.canDisableThinking) fail(`${model}: ${caps.thinkingOffReason}`);
     if (effort && caps.thinkingOffUnavailableAt.includes(effort)) fail(`${model} cannot disable thinking at effort=${effort}; choose low, medium or high`);
   } else if (thinking && !caps.supportsThinking) fail(`Thinking support for ${model} is unknown`);
@@ -46,7 +56,10 @@ export function normalizeThinking(body, model, config, fail) {
     }
     thinking = 'enabled';
   }
-  return { effort, thinking, thinkingBudget: budgetTokens, thinkingControl: body.effort !== undefined || body.reasoning_effort !== undefined || body.thinking !== undefined };
+  // Display only changes what is returned, so it must not reset the inherited thinking environment.
+  const modeKeys = body.thinking && typeof body.thinking === 'object' ? Object.keys(body.thinking).filter(key => key !== 'display') : [];
+  const thinkingControl = body.effort !== undefined || body.reasoning_effort !== undefined || typeof body.thinking === 'boolean' || modeKeys.length > 0;
+  return { effort, thinking, thinkingBudget: budgetTokens, thinkingControl, thinkingDisplay: thinking === 'disabled' ? undefined : display ?? config.thinkingDisplay };
 }
 
 export function thinkingEnvironment(request, inherited) {

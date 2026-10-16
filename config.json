@@ -20,6 +20,7 @@
       "haiku"
     ],
     "discoveryTimeoutSeconds": 15,
-    "modelCheckMaxAgeHours": 24
+    "modelCheckMaxAgeHours": 24,
+    "thinkingDisplay": "summarized"
   }
 }

@@ -13,6 +13,13 @@ if (model === 'hang') {
   output({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'PRIVATE_SECRET' });
 } else if (model === 'filtered') {
   output({ type: 'assistant', error: 'invalid_request', message: { content: [{ type: 'text', text: 'safeguards flagged this message [reasoning_extraction] PRIVATE_SECRET' }] } });
+} else if (model === 'thinking') {
+  // Mirrors Claude 5 models: thinking text is empty unless a summarized display is requested.
+  const summarized = args[args.indexOf('--thinking-display') + 1] === 'summarized' && args.includes('--thinking-display');
+  for (const part of summarized ? ['先化简', '再计数'] : ['', '']) output({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: part } } });
+  output({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '93' } } });
+  output({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: summarized ? '先化简再计数' : '' }, { type: 'text', text: '93' }] } });
+  output({ type: 'result', subtype: 'success', is_error: false, result: '93', usage: { input_tokens: 1, output_tokens: 1 } });
 } else if (model === 'no-result') {
   output({ type: 'assistant', message: { content: [{ type: 'text', text: 'partial' }] } });
 } else {

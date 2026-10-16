@@ -63,6 +63,23 @@ test('fixed Haiku budget is validated instead of being treated as an effort leve
   assert.throws(() => request({ thinking: { budget_tokens: 2048 } }), /non-adaptive/);
 });
 
+test('thinking display comes from the request, falls back to config and is dropped when thinking is off', () => {
+  assert.equal(request().thinkingDisplay, 'summarized');
+  assert.equal(normalizeRequest({ model: 'sonnet', messages: [{ role: 'user', content: 'hi' }] }, { ...config, thinkingDisplay: 'omitted' }).thinkingDisplay, 'omitted');
+  assert.equal(request({ thinking_display: 'omitted' }).thinkingDisplay, 'omitted');
+  assert.equal(request({ thinking: { display: 'omitted' } }).thinkingDisplay, 'omitted');
+  assert.equal(request({ thinking: { type: 'adaptive', display: 'summarized' }, effort: 'low' }).thinkingDisplay, 'summarized');
+  // A display-only object changes what is returned, not the thinking mode or inherited env.
+  const displayOnly = request({ thinking: { display: 'summarized' } });
+  assert.equal(displayOnly.thinking, undefined);
+  assert.equal(displayOnly.thinkingControl, false);
+  assert.equal(request({ effort: 'none' }).thinkingDisplay, undefined);
+  assert.throws(() => request({ thinking_display: 'highlights' }), /summarized or omitted/);
+  assert.throws(() => request({ thinking: { display: 'full' } }), /summarized or omitted/);
+  assert.throws(() => request({ thinking_display: 'omitted', thinking: { display: 'summarized' } }), /conflict/);
+  assert.throws(() => request({ effort: 'none', thinking_display: 'summarized' }), /cannot be set when thinking is disabled/);
+});
+
 test('request controls override inherited thinking env without mutating it', () => {
   const parent = { CLAUDE_CODE_EFFORT_LEVEL: 'max', MAX_THINKING_TOKENS: '99', CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: '1' };
   const off = thinkingEnvironment(request({ effort: 'off' }), parent);

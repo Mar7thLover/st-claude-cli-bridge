@@ -110,6 +110,15 @@
           "maximum": 8760,
           "default": 24,
           "description": "npm run models:check 结果作为「已验证」的有效期（小时）。"
+        },
+        "thinkingDisplay": {
+          "type": "string",
+          "enum": [
+            "summarized",
+            "omitted"
+          ],
+          "default": "summarized",
+          "description": "思维链返回方式。summarized：返回模型思维的总结文本（作为 reasoning_content 输出）；omitted：不返回思维文本（Claude 5 系列在 CLI 中的默认行为）。请求中的 thinking_display 或 thinking.display 优先于此项。"
         }
       }
     }

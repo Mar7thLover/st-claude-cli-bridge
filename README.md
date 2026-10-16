@@ -88,6 +88,10 @@ Opus 5 的特殊情况：经桥接器调用时，只要关闭思考或没有指�
 | 显式开启思考 | `"thinking":true` 或 `"thinking":{"type":"enabled"}` |
 | 固定思考预算（仅 `claude-haiku-4-5-20251001`、`claude-sonnet-4-5-20250929`、`claude-opus-4-5-20251101`） | `"thinking":{"type":"enabled","budget_tokens":2048}`，同时确保 `max_tokens` 大于预算；4.6 及之后的模型 API 不再接受 |
 | 关闭思考但保留较低 effort | 如 `claude-sonnet-5`：`"effort":"low","thinking":false` |
+| 返回思维链总结 | `"thinking_display":"summarized"`（默认），也接受 `"thinking":{"display":"summarized"}` |
+| 不返回思维文本 | `"thinking_display":"omitted"` |
+
+思维链以 `reasoning_content` 输出（流式在 delta 中，非流式在 message 中）。Claude 5 系列在 CLI 中默认不返回思维文本，只给出空的 thinking 块，前端会显示成空的「思考中」占位。桥接器默认通过 CLI 的 `--thinking-display summarized` 请求模型返回思维的**总结**（不是完整原文；这是 API 对 Claude 4 以来模型的统一做法），各模型实测都能返回。设为 `omitted` 时不返回思维文本，首个正文 token 会更快；无论哪种设置，空的思维片段都不会转发给前端。默认值可在 `config.json` 的 `claude.thinkingDisplay` 中修改。关闭思考时不能同时指定 display。
 
 `effort` 与 `reasoning_effort` 同传时必须一致。关闭思考会向 CLI 子进程设置 `MAX_THINKING_TOKENS=0`；`none/off` 不是 CLI effort 档位，不会错误地传给 `--effort`。未指定 effort 的关闭请求使用 `high`，避免继承不兼容的高档位。显式参数会覆盖进程环境中的思考设置；所有子进程参数均按请求隔离，不修改全局 Claude 配置。
 
@@ -138,10 +142,11 @@ npm run config -- --schema    # 修改 src/config.js 的 SETTINGS 后重新生�
 | `claude.extraModels` | `BRIDGE_MODELS`（逗号分隔） | `["sonnet","opus","haiku"]`；在自动发现列表之外追加，不验证账户权限 |
 | `claude.discoveryTimeoutSeconds` | — | `15`，启动时读取模型菜单的超时 |
 | `claude.modelCheckMaxAgeHours` | — | `24`，`models:check` 结果视为「已验证」的有效期 |
+| `claude.thinkingDisplay` | — | `summarized`；思维链返回方式，`summarized` 返回总结，`omitted` 不返回。请求中的 `thinking_display` 优先 |
 
 `config.json` 默认不含任何密钥；如果在其中填写了 `server.apiKey`，不要把它提交到公开仓库，或改用 `.env` 中的 `BRIDGE_API_KEY`。
 
-在 Claude Code 2.1.274～2.1.301 上实测。CLI 须支持 `--safe-mode`、`--system-prompt-file`、`--include-partial-messages` 等参数；旧版本需升级。Windows 下 `claude.bin` 应指向原生 `.exe`，本项目不通过 shell 执行 `.cmd` 或拼接命令。
+在 Claude Code 2.1.274～2.1.301 上实测。CLI 须支持 `--safe-mode`、`--system-prompt-file`、`--include-partial-messages`、`--thinking-display` 等参数；旧版本需升级。Windows 下 `claude.bin` 应指向原生 `.exe`，本项目不通过 shell 执行 `.cmd` 或拼接命令。
 
 ## 验证
 

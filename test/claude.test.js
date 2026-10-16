@@ -62,6 +62,22 @@ test('missing Claude executable returns actionable error', async () => {
   }, /Cannot start Claude Code/);
 });
 
+test('thinking display is passed to the CLI and empty omitted thinking is never forwarded', async () => {
+  const run = async (thinkingDisplay, thinking) => {
+    let flag;
+    const h = harness(args => { flag = args.includes('--thinking-display') ? args[args.indexOf('--thinking-display') + 1] : undefined; });
+    const reasoning = [];
+    for await (const event of runClaude({ ...request, model: 'thinking', thinkingDisplay, thinking }, getConfig({}, null), new AbortController().signal, h.deps)) {
+      if (event.type === 'reasoning') reasoning.push(event.text);
+    }
+    h.check();
+    return { flag, reasoning };
+  };
+  assert.deepEqual(await run('summarized'), { flag: 'summarized', reasoning: ['先化简', '再计数'] });
+  assert.deepEqual(await run('omitted'), { flag: 'omitted', reasoning: [] });
+  assert.deepEqual(await run(undefined, 'disabled'), { flag: undefined, reasoning: [] });
+});
+
 test('real spawn boundary receives effort and thinking environment independently', async () => {
   for (const control of [{ effort: 'max' }, { thinking: 'disabled' }, { thinking: 'enabled', thinkingBudget: 2048 }]) {
     const h = harness((args, env) => {
