@@ -9,30 +9,42 @@ export const modelChecksFile = new URL('../.runtime/model-checks.json', import.m
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 export const validModel = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}(?:\[1m\])?$/.test(value);
 const stripContext = value => value.replace(/\[1m\]$/, '');
-const fallbackAliases = { sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5', haiku: 'claude-haiku-4-5-20251001', fable: 'claude-fable-5-1' };
+const fallbackAliases = { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', haiku: 'claude-haiku-5-5', fable: 'claude-fable-5-1' };
 
 // Model capability rules from Claude Code model-config and Claude API thinking
-// docs, checked 2026-09-24. CLI effort differs from the raw Anthropic API.
+// docs, checked 2026-10-16. CLI effort differs from the raw Anthropic API.
 export function capabilitiesFor(model, provider = 'firstParty', cli) {
   const id = stripContext(model);
   let levels = [];
-  if (/^claude-(?:fable-5(?:-1)?|mythos-5(?:-1)?|opus-(?:5|4-[78])|sonnet-5)(?:-|$)/.test(id)) levels = EFFORT_LEVELS;
+  if (/^claude-(?:fable-5(?:-1)?|mythos-5(?:-1)?|opus-(?:5|4-[78])|sonnet-5|haiku-5)(?:-|$)/.test(id)) levels = EFFORT_LEVELS;
   else if (/^claude-(?:opus|sonnet)-4-6(?:-|$)/.test(id)) levels = ['low', 'medium', 'high', 'max'];
   if (cli) levels = cli.supportsEffort ? (cli.supportedEffortLevels || levels).filter(level => EFFORT_LEVELS.includes(level)) : [];
-  const knownThinking = /^claude-(?:haiku-4-5|sonnet-(?:4|5)|opus-(?:4|5)|3-7-sonnet|fable-5|mythos-)/.test(id);
+  const knownThinking = /^claude-(?:haiku-(?:4-5|5)|sonnet-(?:4|5)|opus-(?:4|5)|3-7-sonnet|fable-5|mythos-)/.test(id);
   // Opus 5.5 rejects thinking disabled at every effort level, like Fable/Mythos.
   const alwaysOn = /^claude-(?:fable-|mythos-|opus-5-5(?:-|$))/.test(id);
-  const canDisable = provider === 'firstParty' && knownThinking && !alwaysOn;
-  const restrictedOffLevels = /^claude-opus-5(?!-5)(?:-|$)/.test(id) ? ['xhigh', 'max'] : [];
+  // Measured 2026-10-16 with Claude Code 2.1.301 on a reasoning prompt: Sonnet/Haiku 5.5
+  // keep thinking under every CLI off switch, and Opus 5 with thinking off is rejected by
+  // upstream safeguards under the bridge system prompt (plain CLI prompts pass).
+  const cliIgnoresOff = /^claude-(?:sonnet|haiku)-5-5(?:-|$)/.test(id);
+  const offRejected = /^claude-opus-5(?!-5)(?:-|$)/.test(id);
+  const canDisable = provider === 'firstParty' && knownThinking && !alwaysOn && !cliIgnoresOff && !offRejected;
+  // No current model needs a per-effort restriction; kept for the /v1/models contract.
+  const restrictedOffLevels = [];
+  // Opus 5 under the bridge prompt is also rejected when no effort is passed, but works with
+  // any explicit level, so requests without one get its API default (high) explicitly.
+  const bridgeDefaultEffort = offRejected ? 'high' : null;
   return {
     supportsEffort: levels.length > 0,
     effortLevels: [...levels],
     supportsThinking: knownThinking || cli?.supportsAdaptiveThinking === true,
     canDisableThinking: canDisable,
     thinkingOffUnavailableAt: restrictedOffLevels,
-    maxContext: /\[1m\]$/.test(model) || /^claude-(?:fable-5|sonnet-5|opus-(?:5|4-[78]))/.test(id) ? 1000000 : 200000,
-    maxOutput: 64000,
-    thinkingOffReason: canDisable ? null : alwaysOn ? 'This model requires thinking' : provider !== 'firstParty' ? 'Claude Code cannot guarantee thinking is disabled on this provider' : 'Thinking-off support has not been verified for this model',
+    bridgeDefaultEffort,
+    maxContext: /\[1m\]$/.test(model) || /^claude-(?:fable-5|sonnet-5|haiku-5|opus-(?:5|4-[78]))/.test(id) ? 1000000 : 200000,
+    thinkingOffReason: canDisable ? null : alwaysOn ? 'This model requires thinking'
+      : cliIgnoresOff ? 'Claude Code does not turn thinking off for this model'
+      : offRejected ? 'Upstream safeguards reject this model with thinking off through the bridge'
+      : provider !== 'firstParty' ? 'Claude Code cannot guarantee thinking is disabled on this provider' : 'Thinking-off support has not been verified for this model',
   };
 }
 

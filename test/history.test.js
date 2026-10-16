@@ -11,8 +11,10 @@ test('latest menu is supplemented with active historical IDs without advertising
   const catalog = buildModelCatalog(menu, ['claude-opus-4-6']);
   for (const model of HISTORICAL_MODELS) {
     assert.equal(catalog.filter(row => row.id === model.id).length, 1);
-    assert.equal(catalog.find(row => row.id === model.id).lifecycle, 'active');
+    assert.equal(catalog.find(row => row.id === model.id).lifecycle, model.retiresAt ? 'deprecated' : 'active');
   }
+  assert.equal(catalog.find(row => row.id === 'claude-sonnet-4-5-20250929').retiresAt, '2026-11-30');
+  for (const id of ['claude-sonnet-5', 'claude-haiku-4-5-20251001']) assert.equal(catalog.find(row => row.id === id).lifecycle, 'active');
   for (const retired of RETIRED_MODELS) assert.ok(!catalog.some(row => row.id === retired.id));
   const all = buildModelCatalog(menu, [], 'firstParty', { includeRetired: true });
   for (const retired of RETIRED_MODELS) assert.equal(all.find(row => row.id === retired.id).availability, 'retired');
@@ -61,6 +63,10 @@ test('models endpoint shows historical status and only includes retired IDs on e
   const ordinary = await fetch(url).then(r => r.json());
   assert.ok(ordinary.data.find(row => row.id === 'claude-opus-4-6').name.includes('未验证'));
   assert.ok(!ordinary.data.some(row => row.lifecycle === 'retired'));
+  const sonnet45 = ordinary.data.find(row => row.id === 'claude-sonnet-4-5-20250929');
+  assert.equal(sonnet45.lifecycle, 'deprecated');
+  assert.equal(sonnet45.retires_at, '2026-11-30');
+  assert.ok(sonnet45.name.includes('2026-11-30 停用'));
   const all = await fetch(`${url}?include_retired=1`).then(r => r.json());
   const retired = all.data.find(row => row.id === 'claude-opus-4-1-20250805');
   assert.equal(retired.retired_at, '2026-08-05');

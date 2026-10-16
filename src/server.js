@@ -97,8 +97,9 @@ export function createBridge(config, { generate = runClaude, log = console.log }
           const info = modelInfo(model, config);
           const labels = { verified: '已验证', failed: '最近验证失败', 'model-mismatch': '模型发生替换', retired: '已停用', unverified: '未验证' };
           const label = info.source === 'historical-catalog' || info.lifecycle === 'retired' ? ` [${labels[info.availability] || '未验证'}]` : '';
-          return { id: model, object: 'model', created: 0, owned_by: 'local-claude-code', name: `Claude Code · ${info.name}${label}`, context_length: info.maxContext,
-            lifecycle: info.lifecycle || 'unknown', availability: info.availability, verified_at: info.verifiedAt || null, actual_model: info.actualModel || null, retired_at: info.retiredAt || null,
+          const sunset = info.lifecycle === 'deprecated' && info.retiresAt ? ` [${info.retiresAt} 停用]` : '';
+          return { id: model, object: 'model', created: 0, owned_by: 'local-claude-code', name: `Claude Code · ${info.name}${label}${sunset}`, context_length: info.maxContext,
+            lifecycle: info.lifecycle || 'unknown', availability: info.availability, verified_at: info.verifiedAt || null, actual_model: info.actualModel || null, retired_at: info.retiredAt || null, retires_at: info.retiresAt || null,
             resolved_model: info.resolvedModel, source: info.source, supports_effort: info.supportsEffort, effort_levels: info.effortLevels,
             can_disable_thinking: info.canDisableThinking, thinking_off_unavailable_at: info.thinkingOffUnavailableAt, thinking_off_reason: info.thinkingOffReason };
         }) });

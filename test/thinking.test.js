@@ -40,7 +40,7 @@ test('effort and reasoning_effort accept every supported level and detect confli
   assert.throws(() => request({ model: 'haiku', effort: 'high' }), /not supported/);
 });
 
-test('thinking can be disabled only where supported, including Opus effort restrictions', () => {
+test('thinking can be disabled only where it actually works through Claude Code', () => {
   for (const patch of [{ effort: 'none' }, { effort: 'off' }, { reasoning_effort: 'none' }, { thinking: false }, { thinking: { type: 'disabled' } }, { thinking: { enabled: false } }]) {
     assert.equal(request(patch).thinking, 'disabled');
     assert.equal(request({ ...patch, model: 'haiku' }).thinking, 'disabled');
@@ -48,10 +48,10 @@ test('thinking can be disabled only where supported, including Opus effort restr
   }
   assert.throws(() => request({ effort: 'off', thinking: true }), /conflict/);
   assert.throws(() => request({ thinking: { enabled: true, type: 'disabled' } }), /conflict/);
+  // Opus 5 can turn thinking off in the CLI, but upstream safeguards reject it under the bridge prompt.
   for (const model of ['opus', 'default', 'claude-opus-5[1m]']) {
-    assert.equal(request({ model, effort: 'high', thinking: false }).thinking, 'disabled');
-    assert.throws(() => request({ model, effort: 'max', thinking: false }), /cannot disable/);
-    assert.throws(() => request({ model, effort: 'xhigh', thinking: false }), /cannot disable/);
+    assert.equal(request({ model, effort: 'high' }).effort, 'high');
+    assert.throws(() => request({ model, effort: 'high', thinking: false }), /safeguards/);
   }
   assert.throws(() => request({ model: 'custom-model', thinking: false }), /not been verified/);
 });
@@ -86,7 +86,7 @@ test('catalog exposes full effort levels, model-specific off switch and Haiku bu
   assert.equal(caps('claude-opus-5[1m]').maxContext, 1000000);
 });
 
-test('Opus 5.5 keeps thinking on at every effort while Opus 5 keeps its effort restriction', () => {
+test('Opus 5.5 keeps thinking on at every effort; Opus 5 thinking-off is not offered', () => {
   const opus55 = buildModelCatalog([
     { value: 'default', resolvedModel: 'claude-opus-5-5[1m]', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
   ]);
@@ -99,6 +99,31 @@ test('Opus 5.5 keeps thinking on at every effort while Opus 5 keeps its effort r
   }
   assert.equal(capabilitiesFor('claude-opus-5-5').maxContext, 1000000);
   assert.deepEqual(capabilitiesFor('claude-opus-5-5').thinkingOffUnavailableAt, []);
-  assert.equal(capabilitiesFor('claude-opus-5').canDisableThinking, true);
-  assert.deepEqual(capabilitiesFor('claude-opus-5').thinkingOffUnavailableAt, ['xhigh', 'max']);
+  assert.equal(capabilitiesFor('claude-opus-5').canDisableThinking, false);
+  // Opus 5 is only reliable through the bridge with an explicit effort.
+  const opus5 = { ...getConfig({}, null), modelCatalog: buildModelCatalog(), models: [] };
+  const opus5Request = patch => normalizeRequest({ model: 'claude-opus-5', messages: [{ role: 'user', content: 'hi' }], ...patch }, opus5);
+  assert.equal(opus5Request({}).effort, 'high');
+  assert.equal(opus5Request({ effort: 'auto' }).effort, 'high');
+  assert.equal(opus5Request({ effort: 'low' }).effort, 'low');
+  assert.equal(normalizeRequest({ model: 'claude-opus-4-8', messages: [{ role: 'user', content: 'hi' }] }, opus5).effort, undefined);
+});
+
+test('Sonnet 5.5 and Haiku 5.5 match the live CLI menu and measured thinking behaviour', () => {
+  const menu = ['sonnet', 'haiku'].map(value => ({ value, resolvedModel: `claude-${value}-5-5`, supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'], supportsAdaptiveThinking: true }));
+  const catalog55 = buildModelCatalog(menu);
+  const cfg = { ...getConfig({}, null), modelCatalog: catalog55, models: catalog55.map(m => m.id) };
+  const send = patch => normalizeRequest({ messages: [{ role: 'user', content: 'hi' }], ...patch }, cfg);
+  for (const model of ['sonnet', 'haiku', 'claude-sonnet-5-5', 'claude-haiku-5-5']) {
+    const caps = catalog55.find(m => m.id === model);
+    assert.deepEqual(caps.effortLevels, ['low', 'medium', 'high', 'xhigh', 'max']);
+    assert.equal(caps.maxContext, 1000000);
+    assert.equal(caps.canDisableThinking, false);
+    assert.equal(send({ model, effort: 'xhigh' }).effort, 'xhigh');
+    assert.throws(() => send({ model, effort: 'low', thinking: false }), /does not turn thinking off/);
+    // Manual budgets are rejected by the API from the 4.6 generation on.
+    assert.throws(() => send({ model, max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: 2048 } }), /Fixed thinking budget/);
+  }
+  // Older models still turn thinking off for real.
+  for (const id of ['claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-opus-4-8']) assert.equal(capabilitiesFor(id).canDisableThinking, true);
 });

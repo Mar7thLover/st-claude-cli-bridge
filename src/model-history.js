@@ -1,7 +1,7 @@
-// Official Anthropic lifecycle table, checked 2026-09-24:
+// Official Anthropic lifecycle table, checked 2026-10-16:
 // https://platform.claude.com/docs/en/about-claude/model-deprecations
 // API lifecycle is distinct from access through a particular Claude Code account.
-export const HISTORY_CHECKED_AT = '2026-09-24';
+export const HISTORY_CHECKED_AT = '2026-10-16';
 export const HISTORICAL_MODELS = [
   ['claude-fable-5', 'Fable 5'],
   ['claude-opus-5', 'Opus 5'],
@@ -9,9 +9,13 @@ export const HISTORICAL_MODELS = [
   ['claude-opus-4-7', 'Opus 4.7'],
   ['claude-opus-4-6', 'Opus 4.6'],
   ['claude-opus-4-5-20251101', 'Opus 4.5'],
+  ['claude-sonnet-5', 'Sonnet 5'],
   ['claude-sonnet-4-6', 'Sonnet 4.6'],
-  ['claude-sonnet-4-5-20250929', 'Sonnet 4.5'],
-].map(([id, name]) => ({ id, name, lifecycle: 'active', lifecycleCheckedAt: HISTORY_CHECKED_AT }));
+  ['claude-sonnet-4-5-20250929', 'Sonnet 4.5', '2026-11-30'],
+  ['claude-haiku-4-5-20251001', 'Haiku 4.5'],
+].map(([id, name, retiresAt]) => ({
+  id, name, lifecycle: retiresAt ? 'deprecated' : 'active', ...(retiresAt ? { retiresAt } : {}), lifecycleCheckedAt: HISTORY_CHECKED_AT,
+}));
 
 export const RETIRED_MODELS = [
   ['claude-opus-4-1-20250805', '2026-08-05'],

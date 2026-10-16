@@ -36,6 +36,7 @@ export function normalizeThinking(body, model, config, fail) {
     if (effort && caps.thinkingOffUnavailableAt.includes(effort)) fail(`${model} cannot disable thinking at effort=${effort}; choose low, medium or high`);
   } else if (thinking && !caps.supportsThinking) fail(`Thinking support for ${model} is unknown`);
   if (thinking === 'adaptive' && !caps.supportsEffort) fail(`${model} does not support adaptive thinking through this bridge`);
+  if (!effort && thinking !== 'disabled' && budgetTokens === undefined && caps.bridgeDefaultEffort) effort = caps.bridgeDefaultEffort;
   if (budgetTokens !== undefined) {
     if (!Number.isSafeInteger(budgetTokens) || budgetTokens < 1024 || budgetTokens > 128000) fail('thinking.budget_tokens must be an integer between 1024 and 128000');
     if (thinking === 'disabled' || thinking === 'adaptive') fail('Thinking budget conflicts with the requested thinking mode');

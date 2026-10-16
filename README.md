@@ -30,33 +30,39 @@ Windows 后台运行可使用 `./start-background.ps1`，停止使用 `./stop-ba
 
 桥接器每次启动，通过 Claude Code SDK 的 `initialize` 控制消息读取当前账号的模型菜单和 effort 能力；发现菜单不发起模型生成，也不保存账号身份信息。由于 CLI 菜单只列最新模型，桥接器另外补充官方仍在服务的历史模型目录。`GET /v1/models` 返回菜单项、完整 ID、常用别名及旧版模型。`npm run models` 可随时重新查询，`npm run models -- --json` 输出详细能力。菜单随 Claude Code 版本、账号与提供商变化；用户额外配置的模型标记为 `configured`。
 
-2026-09-24，Claude Code 2.1.281、firstParty 登录发现以下 14 个 ID／别名（归属于 4 个模型）：
+2026-10-16，Claude Code 2.1.301、firstParty 登录发现以下 13 个 ID／别名（归属于 4 个模型）。effort 档位取自 CLI 菜单，上下文和默认值取自[官方模型概览](https://platform.claude.com/docs/en/about-claude/models/overview)，「关闭思考」一栏是经桥接器实测的结果：
 
-| 模型 | 可传入的 model 值 | effort | 关闭思考 |
+| 模型 | 可传入的 model 值 | effort（API 默认） | 关闭思考 |
 | --- | --- | --- | --- |
-| Sonnet 5 | `sonnet`、`sonnet[1m]`、`claude-sonnet-5` | `low`、`medium`、`high`、`xhigh`、`max` | 允许 |
-| Opus 5.5 | `default`、`opus`、`opus[1m]`、`claude-opus-5-5`、`claude-opus-5-5[1m]` | 同上（API 默认 `medium`） | 不允许（任何 effort 下都不能关） |
-| Fable 5.1 | `fable`、`best`、`claude-fable-5-1`、`claude-fable-5-1[1m]` | 同上 | 不允许 |
-| Haiku 4.5 | `haiku`、`claude-haiku-4-5-20251001` | CLI 不支持 effort | 允许；可设置固定思考预算 |
+| Opus 5.5 | `default`、`opus`、`opus[1m]`、`claude-opus-5-5` | `low`～`max` 五档（`medium`） | 不允许：模型始终思考 |
+| Fable 5.1 | `fable`、`best`、`claude-fable-5-1`、`claude-fable-5-1[1m]` | 五档（`high`） | 不允许：模型始终思考 |
+| Sonnet 5.5 | `sonnet`、`sonnet[1m]`、`claude-sonnet-5-5` | 五档（`high`） | 不允许：CLI 的关闭设置对它不生效 |
+| Haiku 5.5 | `haiku`、`claude-haiku-5-5` | 五档（`medium`） | 不允许：同上 |
 
-> 注意：2026-10-15 起，Claude Code 2.1.301 的菜单中 `sonnet`／`haiku` 已分别解析为 `claude-sonnet-5-5`／`claude-haiku-5-5`。静态能力规则尚未针对这两个模型核实：Haiku 5.5 目前按 CLI 菜单开放 effort，但「关闭思考」和固定思考预算暂不可用（返回 400）。实际能力以 `npm run models` 输出为准。
+四个模型都是 1M 上下文、128K 最大输出。`default` 当前解析为 `claude-opus-5-5`，`best` 解析为 Fable 5.1。完整 ID 可用于固定版本，别名会随 CLI 升级变化（例如 `sonnet`／`haiku` 在 2026-10 从 Sonnet 5／Haiku 4.5 切换到了 5.5）。
 
-`default` 当时解析为 `claude-opus-5-5[1m]`；`best` 解析为 Fable 5.1。完整 ID 可用于固定版本，别名可能随 CLI 升级变化。模型菜单可见不等于每个请求都会通过上游服务；配额、服务错误和内容拒绝仍会原样作为失败处理。
+关于 Sonnet 5.5 和 Haiku 5.5 的关闭思考：API 层面 Haiku 5.5 允许在 `high` 及以下档位关闭，Sonnet 5.5 也有最低档的 `between_tools`。但实测中，Claude Code 的 `MAX_THINKING_TOKENS=0`、`alwaysThinkingEnabled:false`、`CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING` 都没能让它们停止思考：在推理题上仍会产生 250～800 个推理 token。所以桥接器不对它们开放关闭选项。想少思考，可以把 effort 降到 `low`。
 
-此外，默认列表补充了以下 **8 个旧版模型**。`claude-opus-5` 于 2026-09-24 随 Opus 5.5 上线移入本表，尚未校验；其余 7 个 2026-09-17 已通过本机 Claude Code 逐个真实生成校验，确认回复内容和实际返回的模型 ID，无自动替换：
+模型菜单可见不等于每个请求都会通过上游服务；配额、服务错误和内容拒绝仍会原样作为失败处理。
 
-| 旧版模型 ID | CLI effort | 关闭思考 |
-| --- | --- | --- |
-| `claude-opus-4-8` | `low/medium/high/xhigh/max` | 支持 |
-| `claude-opus-4-7` | `low/medium/high/xhigh/max` | 支持 |
-| `claude-opus-4-6` | `low/medium/high/max` | 支持 |
-| `claude-opus-4-5-20251101` | CLI 不提供 effort；使用固定预算 | 支持 |
-| `claude-sonnet-4-6` | `low/medium/high/max` | 支持 |
-| `claude-sonnet-4-5-20250929` | 固定预算 | 支持 |
-| `claude-fable-5` | `low/medium/high/xhigh/max` | 不支持 |
-| `claude-opus-5` | `low/medium/high/xhigh/max` | 支持，但不能同时指定 `xhigh`／`max` |
+此外，默认列表补充了以下 **10 个旧版模型**，合计 **23 个名称／别名**。2026-10-16 已用 `npm run models:check` 逐个真实生成校验，全部通过，实际返回的模型 ID 与请求一致。标为「支持」关闭思考的模型，也已用推理题实测确认关闭后推理 token 为 0：
 
-`npm run models:check` 会对这 8 个模型分别执行一次简短的真实桥接生成，消耗当前账户额度；只保存模型 ID、实际 ID、校验状态、错误分类和时间。结果存于 `.runtime/model-checks.json`，启动和查询命令读取时，只采纳相同提供商下最近 24 小时（`claude.modelCheckMaxAgeHours`）的记录作为 `[已验证]` 标记，过期记录按 `[未验证]` 处理。这是最近调用记录，不保证配额或账号切换后仍可用；换账号后应重新校验。校验失败只标记“最近验证失败”，不直接认定模型已停用。
+| 旧版模型 ID | CLI effort | 关闭思考 | 状态 |
+| --- | --- | --- | --- |
+| `claude-fable-5` | 五档 | 不支持（始终思考） | 在服务 |
+| `claude-opus-5` | 五档；请求未指定时桥接器自动使用 `high` | 不支持（上游拦截） | 在服务 |
+| `claude-opus-4-8` | 五档 | 支持 | 在服务 |
+| `claude-opus-4-7` | 五档 | 支持 | 在服务 |
+| `claude-opus-4-6` | `low/medium/high/max` | 支持 | 在服务 |
+| `claude-opus-4-5-20251101` | CLI 不提供 effort；可用固定预算 | 支持 | 在服务 |
+| `claude-sonnet-5` | 五档 | 支持 | 在服务 |
+| `claude-sonnet-4-6` | `low/medium/high/max` | 支持 | 在服务 |
+| `claude-sonnet-4-5-20250929` | 固定预算 | 支持 | **已弃用，2026-11-30 停用** |
+| `claude-haiku-4-5-20251001` | 固定预算 | 支持 | 在服务 |
+
+Opus 5 的特殊情况：经桥接器调用时，只要关闭思考或没有指定 effort，就会被上游以 safeguards 拒绝；显式指定任意 effort 则正常。直接调用 CLI 不会出现这个问题，所以问题出在桥接器的 system prompt 与 Opus 5 的组合上。因此对 Opus 5，桥接器不开放关闭思考；请求没带 effort 时，自动显式传入它在 API 上的默认值 `high`，效果与 API 默认一致。
+
+`npm run models:check` 会对这 10 个模型分别执行一次简短的真实桥接生成，消耗当前账户额度；只保存模型 ID、实际 ID、校验状态、错误分类和时间。结果存于 `.runtime/model-checks.json`，启动和查询命令读取时，只采纳相同提供商下最近 24 小时（`claude.modelCheckMaxAgeHours`）的记录作为 `[已验证]` 标记，过期记录按 `[未验证]` 处理。这是最近调用记录，不保证配额或账号切换后仍可用；换账号后应重新校验。校验失败只标记“最近验证失败”，不直接认定模型已停用。
 
 以下模型已被 Anthropic 官方停用，默认不加入模型列表：Opus 4.1（2026-08-05），Opus 4／Sonnet 4（2026-06-15），Sonnet 3.7／Haiku 3.5（2026-02-19），Haiku 3（2026-04-20），Sonnet 3.5（2025-10-28），Opus 3（2026-01-05），Sonnet 3／Claude 2.x（2025-07-21），Claude 1.x／Instant（2024-11-06）。`npm run models -- --all` 或 `GET /v1/models?include_retired=1` 可查看包含这些模型完整 ID 和停用日期的目录。日期来源：[Anthropic 模型停用公告](https://platform.claude.com/docs/en/about-claude/model-deprecations)。这些生命周期规则仅用于 firstParty，第三方平台的停用时间可能不同。
 
@@ -80,12 +86,12 @@ Windows 后台运行可使用 `./start-background.ps1`，停止使用 `./stop-ba
 | 使用 CLI 默认强度 | `"effort":"auto"` |
 | 关闭思考 | `"effort":"none"`、`"effort":"off"`、`"thinking":false` 或 `"thinking":{"type":"disabled"}` |
 | 显式开启思考 | `"thinking":true` 或 `"thinking":{"type":"enabled"}` |
-| 固定思考预算（如 Haiku 4.5） | `"thinking":{"type":"enabled","budget_tokens":2048}`，同时确保 `max_tokens` 大于预算 |
-| 关闭思考但保留较低 effort | 如 Sonnet：`"effort":"low","thinking":false` |
+| 固定思考预算（仅 `claude-haiku-4-5-20251001`、`claude-sonnet-4-5-20250929`、`claude-opus-4-5-20251101`） | `"thinking":{"type":"enabled","budget_tokens":2048}`，同时确保 `max_tokens` 大于预算；4.6 及之后的模型 API 不再接受 |
+| 关闭思考但保留较低 effort | 如 `claude-sonnet-5`：`"effort":"low","thinking":false` |
 
 `effort` 与 `reasoning_effort` 同传时必须一致。关闭思考会向 CLI 子进程设置 `MAX_THINKING_TOKENS=0`；`none/off` 不是 CLI effort 档位，不会错误地传给 `--effort`。未指定 effort 的关闭请求使用 `high`，避免继承不兼容的高档位。显式参数会覆盖进程环境中的思考设置；所有子进程参数均按请求隔离，不修改全局 Claude 配置。
 
-不支持的档位、Opus 5.5／Fable／Mythos 关闭思考、Opus 5 `xhigh/max + thinking:false`、不合法预算或冲突参数返回 HTTP 400，不会偷偷降级。`MAX_THINKING_TOKENS=0` 在第三方提供商上不能保证真正关闭，因此只有已核实支持的 firstParty 模型开放关闭选项。
+不支持的档位、对上表标为「不允许／不支持」的模型关闭思考、对 5.5 系列使用固定预算、不合法预算或冲突参数，都返回 HTTP 400，不会偷偷降级。`MAX_THINKING_TOKENS=0` 在第三方提供商上不能保证真正关闭，因此只有已核实支持的 firstParty 模型开放关闭选项。
 
 前端可读取 `/v1/models` 中每个模型的 `effort_levels`、`can_disable_thinking` 等字段来决定显示哪些档位和开关。
 
@@ -135,7 +141,7 @@ npm run config -- --schema    # 修改 src/config.js 的 SETTINGS 后重新生�
 
 `config.json` 默认不含任何密钥；如果在其中填写了 `server.apiKey`，不要把它提交到公开仓库，或改用 `.env` 中的 `BRIDGE_API_KEY`。
 
-使用 Claude Code 2.1.274 起实测。CLI 须支持 `--safe-mode`、`--system-prompt-file`、`--include-partial-messages` 等参数；旧版本需升级。Windows 下 `claude.bin` 应指向原生 `.exe`，本项目不通过 shell 执行 `.cmd` 或拼接命令。
+在 Claude Code 2.1.274～2.1.301 上实测。CLI 须支持 `--safe-mode`、`--system-prompt-file`、`--include-partial-messages` 等参数；旧版本需升级。Windows 下 `claude.bin` 应指向原生 `.exe`，本项目不通过 shell 执行 `.cmd` 或拼接命令。
 
 ## 验证
 
@@ -144,12 +150,12 @@ npm test                         # 无模型调用，单元/HTTP/进程生命周
 npm run doctor                   # 配置文件、本机 CLI 安装与登录状态，不打印邮箱或凭据
 npm run models                   # 实时读取 CLI 菜单和 effort/关闭思考能力
 npm run models -- --all          # 同时列出已停用模型完整 ID
-npm run models:check             # 对 8 个仍在服务的旧版逐个真实生成校验
+npm run models:check             # 对 10 个仍在服务的旧版逐个真实生成校验
 npm run smoke                    # 真实 Claude Code 流式生成，需要桥接器已启动
 npm run smoke:thinking           # 真实模型 effort/关闭验证；任一生成失败返回非零
 ```
 
-`smoke` 会校验角色名、用户身份、世界书地点和作者注释校验码是否都被模型正确使用。`smoke`、`smoke:thinking` 和 `models:check` 都会消耗当前登录账户的额度。`smoke:thinking` 仍按 Haiku 4.5 的能力编写，CLI 将 `haiku` 解析为 Haiku 5.5 后，其中 Haiku 相关的断言可能失败。
+`smoke` 会校验角色名、用户身份、世界书地点和作者注释校验码是否都被模型正确使用。`smoke`、`smoke:thinking` 和 `models:check` 都会消耗当前登录账户的额度。`smoke:thinking` 用推理题检查关闭思考后推理 token 是否为 0（简单问题模型本来就不思考，测不出来）。
 
 接口：`GET /health`、`GET /v1/models`、`POST /v1/chat/completions`（同时支持无 `/v1` 前缀）。`/health` 表示桥接进程存活，不代表 Claude 登录有效。
 
